@@ -1,7 +1,7 @@
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <iostream>
-#include "jcodec.hpp"
+#include "jpge.hpp"
 using namespace cv;
 using namespace std;
 
@@ -143,8 +143,8 @@ int main(int, char**)
 	imshow(win, img);
 
 	// Тест методов
-	img = Jcodec::encJPEG(img, 10);
-	imshow(win2, img);
+	//img = Jcodec::encJPEG(img, 10);
+	//imshow(win2, img);
 
 	waitKey(0);
 
