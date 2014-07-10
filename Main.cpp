@@ -2,9 +2,144 @@
 #include <opencv2/highgui/highgui.hpp>
 #include <iostream>
 #include "jpge.hpp"
+#include "jpge.hpp"
+#include "jpgd.h"
+#include "stb_image.c"
+#include "timer.h"
+#include <ctype.h>
+
 using namespace cv;
 using namespace std;
 
+// Это для теста
+static char s_log_filename[256];
+
+static uint get_file_size(const char *pFilename)
+{
+    FILE *pFile = fopen(pFilename, "rb");
+    if (!pFile) return 0;
+    fseek(pFile, 0, SEEK_END);
+    uint file_size = ftell(pFile);
+    fclose(pFile);
+    return file_size;
+}
+
+static void log_printf(const char *pMsg, ...)
+{
+    va_list args;
+
+    va_start(args, pMsg);
+    char buf[2048];
+    vsnprintf(buf, sizeof(buf)-1, pMsg, args);
+    buf[sizeof(buf)-1] = '\0';
+    va_end(args);
+
+    printf("%s", buf);
+
+    if (s_log_filename[0])
+    {
+        FILE *pFile = fopen(s_log_filename, "a+");
+        if (pFile)
+        {
+            fprintf(pFile, "%s", buf);
+            fclose(pFile);
+        }
+    }
+}
+
+static void encode()
+{
+    // Тест jpge ------------------------------------------------------------------------------------------------------
+    // Parse command line.
+    bool run_exhausive_test = false;
+    bool test_memory_compression = false;
+    bool optimize_huffman_tables = false;
+    int subsampling = -1;
+    char output_filename[256] = "";
+    bool use_jpgd = true;
+    bool test_jpgd_decompression = false;
+
+    int quality_factor = 50;
+    const char* pSrc_filename = "test.png";
+    const char* pDst_filename = "comp.jpg";
+
+    // Load the source image.
+    const int req_comps = 3; // request RGB image
+    int width = 0, height = 0, actual_comps = 0;
+    uint8 *pImage_data = stbi_load(pSrc_filename, &width, &height, &actual_comps, req_comps);
+    if (!pImage_data)
+    {
+        log_printf("Failed loading file \"%s\"!\n", pSrc_filename);
+        //return 0;
+    }
+
+    log_printf("Source file: \"%s\", image resolution: %ix%i, actual comps: %i\n", pSrc_filename, width, height, actual_comps);
+
+    // Fill in the compression parameter structure.
+    jpge::params params;
+    params.m_quality = quality_factor;
+    params.m_subsampling = (subsampling < 0) ? ((actual_comps == 1) ? jpge::Y_ONLY : jpge::H2V2) : static_cast<jpge::subsampling_t>(subsampling);
+    params.m_two_pass_flag = optimize_huffman_tables;
+
+    log_printf("Writing JPEG image to file: %s\n", pDst_filename);
+
+    timer tm;
+
+    // Now create the JPEG file.
+    if (test_memory_compression)
+    {
+        int buf_size = width * height * 3; // allocate a buffer that's hopefully big enough (this is way overkill for jpeg)
+        if (buf_size < 1024) buf_size = 1024;
+        void *pBuf = malloc(buf_size);
+
+        tm.start();
+        if (!jpge::compress_image_to_jpeg_file_in_memory(pBuf, buf_size, width, height, req_comps, pImage_data, params))
+        {
+            log_printf("Failed creating JPEG data!\n");
+            //return EXIT_FAILURE;
+        }
+        tm.stop();
+
+        FILE *pFile = fopen(pDst_filename, "wb");
+        if (!pFile)
+        {
+            log_printf("Failed creating file \"%s\"!\n", pDst_filename);
+            //return EXIT_FAILURE;
+        }
+
+        if (fwrite(pBuf, buf_size, 1, pFile) != 1)
+        {
+            log_printf("Failed writing to output file!\n");
+            //return EXIT_FAILURE;
+        }
+
+        if (fclose(pFile) == EOF)
+        {
+            log_printf("Failed writing to output file!\n");
+            //return EXIT_FAILURE;
+        }
+    }
+    else
+    {
+        tm.start();
+
+        if (!jpge::compress_image_to_jpeg_file(pDst_filename, width, height, req_comps, pImage_data, params))
+        {
+            log_printf("Failed writing to output file!\n");
+            //return EXIT_FAILURE;
+        }
+        tm.stop();
+    }
+
+    double total_comp_time = tm.get_elapsed_ms();
+
+    const uint comp_file_size = get_file_size(pDst_filename);
+    const uint total_pixels = width * height;
+    log_printf("Compressed file size: %u, bits/pixel: %3.3f\n", comp_file_size, (comp_file_size * 8.0f) / total_pixels);
+
+    // Конец теста jpge ------------------------------------------------------------------------------------------------------------------------------------
+}
+// Конец
 static void help()
 {
 	cout << "\nThis program demostrates iterative construction of\n"
@@ -132,7 +267,7 @@ int main(int, char**)
 
 		img = Scalar::all(0);
 		draw_subdiv(img, subdiv, delaunay_color);
-		//imshow(win, img);
+		imshow(win, img);
 
 		if (waitKey(100) >= 0)
 			break;
@@ -140,11 +275,7 @@ int main(int, char**)
 
 	img = Scalar::all(0);
 	paint_voronoi(img, subdiv);
-	imshow(win, img);
-
-	// Тест методов
-	//img = Jcodec::encJPEG(img, 10);
-	//imshow(win2, img);
+	//imshow(win, img);
 
 	waitKey(0);
 
