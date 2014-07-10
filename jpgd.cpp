@@ -8,7 +8,7 @@
 // Chroma upsampling quality: H2V2 is upsampled in the frequency domain, H2V1 and H1V2 are upsampled using point sampling.
 // Chroma upsampling reference: "Fast Scheme for Image Size Change in the Compressed Domain"
 // http://vision.ai.uiuc.edu/~dugad/research/dct/index.html
-
+ 
 #include "jpgd.h"
 #include <string.h>
 
