@@ -169,9 +169,9 @@ static void draw_subdiv(Mat& img, Subdiv2D& subdiv, Scalar delaunay_color)
 		pt[0] = Point(cvRound(t[0]), cvRound(t[1]));
 		pt[1] = Point(cvRound(t[2]), cvRound(t[3]));
 		pt[2] = Point(cvRound(t[4]), cvRound(t[5]));
-		line(img, pt[0], pt[1], delaunay_color, 1, LINE_AA, 0);
-		line(img, pt[1], pt[2], delaunay_color, 1, LINE_AA, 0);
-		line(img, pt[2], pt[0], delaunay_color, 1, LINE_AA, 0);
+        line(img, pt[0], pt[1], Scalar(rand() % 255, rand() % 255, rand() % 255), 1, LINE_AA, 0);
+        line(img, pt[1], pt[2], Scalar(rand() % 255, rand() % 255, rand() % 255), 1, LINE_AA, 0);
+        line(img, pt[2], pt[0], Scalar(rand() % 255, rand() % 255, rand() % 255), 1, LINE_AA, 0);
 	}
 #else
 	vector<Vec4f> edgeList;
@@ -214,7 +214,7 @@ static void paint_voronoi(Mat& img, Subdiv2D& subdiv)
 	vector<vector<Point2f> > facets;
 	vector<Point2f> centers;
 	subdiv.getVoronoiFacetList(vector<int>(), facets, centers);
-
+    srand(22);
 	vector<Point> ifacet;
 	vector<vector<Point> > ifacets(1);
 
@@ -240,7 +240,7 @@ static void paint_voronoi(Mat& img, Subdiv2D& subdiv)
 int main(int, char**)
 {
 	help();
-
+    srand(22);
 	Scalar active_facet_color(0, 0, 255), delaunay_color(255, 255, 255);
 	Rect rect(0, 0, 600, 600);
 
@@ -258,8 +258,7 @@ int main(int, char**)
 		Point2f fp((float)(rand() % (rect.width - 10) + 5),
 			(float)(rand() % (rect.height - 10) + 5));
 
-		locate_point(img, subdiv, fp, active_facet_color);
-		//imshow(win, img);
+        locate_point(img, subdiv, fp, Scalar(rand() % 255, rand() % 255, rand() % 255));
 		imshow(win, img);
 
         //test//
