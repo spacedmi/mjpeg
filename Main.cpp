@@ -246,11 +246,12 @@ int main(int, char**)
 
 	Subdiv2D subdiv(rect);
 	Mat img(rect.size(), CV_8UC3);
+    Mat img2(rect.size(), CV_8UC3);
 
 	img = Scalar::all(0);
 	string win = "Delaunay Demo";
 	string win2 = "Delaunay Dec Demo";
-	//imshow(win, img);
+	imshow(win, img);
 
 	for (int i = 0; i < 200; i++)
 	{
@@ -259,6 +260,13 @@ int main(int, char**)
 
 		locate_point(img, subdiv, fp, active_facet_color);
 		//imshow(win, img);
+		imshow(win, img);
+
+        //test//
+        imwrite("test.png", img);
+        encode();
+        img2 = imread("comp.jpg");
+        imshow(win2, img2);
 
 		if (waitKey(100) >= 0)
 			break;
