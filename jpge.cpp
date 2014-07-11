@@ -1035,4 +1035,5 @@ bool compress_image_to_jpeg_file_in_memory(void *pDstBuf, int &buf_size, int wid
    return true;
 }
 
+
 } // namespace jpge

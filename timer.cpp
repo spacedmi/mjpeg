@@ -4,7 +4,7 @@
 #include <assert.h>
 #include <time.h>
 
-#include "timer.h"
+#include "timer.hpp"
 
 #if defined(WIN32)
 #include <windows.h>

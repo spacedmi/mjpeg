@@ -3,9 +3,8 @@
 #include <iostream>
 #include "jpge.hpp"
 #include "jpge.hpp"
-#include "jpgd.h"
-#include "stb_image.c"
-#include "timer.h"
+#include "timer.hpp"
+#include "stb_image.cpp"
 #include <ctype.h>
 
 using namespace cv;
@@ -59,7 +58,7 @@ static void encode()
     bool use_jpgd = true;
     bool test_jpgd_decompression = false;
 
-    int quality_factor = 50;
+    int quality_factor = 90;
     const char* pSrc_filename = "test.png";
     const char* pDst_filename = "comp.jpg";
 
