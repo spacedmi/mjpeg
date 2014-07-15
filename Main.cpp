@@ -4,6 +4,7 @@
 #include "jpge.hpp"
 #include "jpge.hpp"
 #include "timer.hpp"
+#include "mjpegwriter.hpp"
 #include "stb_image.cpp"
 #include <ctype.h>
 
@@ -238,52 +239,55 @@ static void paint_voronoi(Mat& img, Subdiv2D& subdiv)
 
 int main(int, char**)
 {
-	help();
-    srand(22);
-	Scalar active_facet_color(0, 0, 255), delaunay_color(255, 255, 255);
-	Rect rect(0, 0, 600, 600);
+	//help();
+ //   srand(22);
+	//Scalar active_facet_color(0, 0, 255), delaunay_color(255, 255, 255);
+	//Rect rect(0, 0, 600, 600);
 
-	Subdiv2D subdiv(rect);
-	Mat img(rect.size(), CV_8UC3);
-    Mat img2(rect.size(), CV_8UC3);
+	//Subdiv2D subdiv(rect);
+	//Mat img(rect.size(), CV_8UC3);
+ //   Mat img2(rect.size(), CV_8UC3);
 
-	img = Scalar::all(0);
-	string win = "Delaunay Demo";
-	string win2 = "Delaunay Dec Demo";
-	imshow(win, img);
-
-	for (int i = 0; i < 200; i++)
-	{
-		Point2f fp((float)(rand() % (rect.width - 10) + 5),
-			(float)(rand() % (rect.height - 10) + 5));
-
-        locate_point(img, subdiv, fp, Scalar(rand() % 255, rand() % 255, rand() % 255));
-		imshow(win, img);
-
-        //test//
-        imwrite("test.png", img);
-        encode();
-        img2 = imread("comp.jpg");
-        imshow(win2, img2);
-
-		if (waitKey(100) >= 0)
-			break;
-
-		subdiv.insert(fp);
-
-		img = Scalar::all(0);
-		draw_subdiv(img, subdiv, delaunay_color);
-		imshow(win, img);
-
-		if (waitKey(100) >= 0)
-			break;
-	}
-
-	img = Scalar::all(0);
-	paint_voronoi(img, subdiv);
+	//img = Scalar::all(0);
+	//string win = "Delaunay Demo";
+	//string win2 = "Delaunay Dec Demo";
 	//imshow(win, img);
 
-	waitKey(0);
+	//for (int i = 0; i < 200; i++)
+	//{
+	//	Point2f fp((float)(rand() % (rect.width - 10) + 5),
+	//		(float)(rand() % (rect.height - 10) + 5));
 
+ //       locate_point(img, subdiv, fp, Scalar(rand() % 255, rand() % 255, rand() % 255));
+	//	imshow(win, img);
+
+ //       //test//
+ //       imwrite("test.png", img);
+ //       encode();
+ //       img2 = imread("comp.jpg");
+ //       imshow(win2, img2);
+
+	//	if (waitKey(100) >= 0)
+	//		break;
+
+	//	subdiv.insert(fp);
+
+	//	img = Scalar::all(0);
+	//	draw_subdiv(img, subdiv, delaunay_color);
+	//	imshow(win, img);
+
+	//	if (waitKey(100) >= 0)
+	//		break;
+	//}
+
+	//img = Scalar::all(0);
+	//paint_voronoi(img, subdiv);
+	////imshow(win, img);
+
+	//waitKey(0);
+
+    MjpegWriter * j = new MjpegWriter();
+    j->Open("out.avi", AVI, 20);
+    j->Close();
 	return 0;
 }
