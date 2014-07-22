@@ -52,7 +52,7 @@ namespace jpge
   // Writes JPEG image to memory buffer. 
   // On entry, buf_size is the size of the output buffer pointed at by pBuf, which should be at least ~1024 bytes. 
   // If return value is true, buf_size will be set to the size of the compressed data.
-  bool compress_image_to_jpeg_file_in_memory(void *pBuf, int &buf_size, int width, int height, int num_channels, const uint8 *pImage_data, const params &comp_params = params());
+  bool compress_image_to_jpeg_file_in_memory(void *&pBuf, int &buf_size, int width, int height, int num_channels, const uint8 *pImage_data, const params &comp_params = params());
     
   // Output stream abstract class - used by the jpeg_encoder class to write to the output stream. 
   // put_buf() is generally called with len==JPGE_OUT_BUF_SIZE bytes, but for headers it'll be called with smaller amounts.
@@ -89,7 +89,7 @@ namespace jpge
 
     // Call this method with each source scanline.
     // width * src_channels bytes per scanline is expected (RGB or Y format).
-    // You must call with NULL after all scanlines are processed to finish compression.
+    // You must call with 0 after all scanlines are processed to finish compression.
     // Returns false on out of memory or if a stream write fails.
     bool process_scanline(const void* pScanline);
         

@@ -4,7 +4,7 @@
 // v1.02, Apr. 6, 2011 - Removed 2x2 ordered dither in H2V1 chroma subsampling method load_block_16_8_8(). (The rounding factor was 2, when it should have been 1. Either way, it wasn't helping.)
 // v1.03, Apr. 16, 2011 - Added support for optimized Huffman code tables, optimized dynamic memory allocation down to only 1 alloc.
 //                        Also from Alex Evans: Added RGBA support, linear memory allocator (no longer needed in v1.03).
-// v1.04, May. 19, 2012: Forgot to set m_pFile ptr to NULL in cfile_stream::close(). Thanks to Owen Kaluza for reporting this bug.
+// v1.04, May. 19, 2012: Forgot to set m_pFile ptr to 0 in cfile_stream::close(). Thanks to Owen Kaluza for reporting this bug.
 //                       Code tweaks to fix VS2008 static code analysis warnings (all looked harmless).
 //                       Code review revealed method load_block_16_8_8() (used for the non-default H2V1 sampling mode to downsample chroma) somehow didn't get the rounding factor fix from v1.02.
 
@@ -482,7 +482,7 @@ bool jpeg_encoder::jpg_open(int p_x_res, int p_y_res, int src_channels)
   m_image_bpl_mcu  = m_image_x_mcu * m_num_components;
   m_mcus_per_row   = m_image_x_mcu / m_mcu_x;
 
-  if ((m_mcu_lines[0] = static_cast<uint8*>(jpge_malloc(m_image_bpl_mcu * m_mcu_y))) == NULL) return false;
+  if ((m_mcu_lines[0] = static_cast<uint8*>(jpge_malloc(m_image_bpl_mcu * m_mcu_y))) == 0) return false;
   for (int i = 1; i < m_mcu_y; i++)
     m_mcu_lines[i] = m_mcu_lines[i-1] + m_image_bpl_mcu;
 
@@ -848,7 +848,7 @@ void jpeg_encoder::load_mcu(const void *pSrc)
 
 void jpeg_encoder::clear()
 {
-  m_mcu_lines[0] = NULL;
+  m_mcu_lines[0] = 0;
   m_pass_num = 0;
   m_all_stream_writes_succeeded = true;
 }
@@ -907,7 +907,7 @@ class cfile_stream : public output_stream
    bool m_bStatus;
 
 public:
-   cfile_stream() : m_pFile(NULL), m_bStatus(false) { }
+   cfile_stream() : m_pFile(0), m_bStatus(false) { }
 
    virtual ~cfile_stream()
    {
@@ -918,7 +918,7 @@ public:
    {
       close();
       m_pFile = fopen(pFilename, "wb");
-      m_bStatus = (m_pFile != NULL);
+      m_bStatus = (m_pFile != 0);
       return m_bStatus;
    }
 
@@ -930,7 +930,7 @@ public:
          {
             m_bStatus = false;
          }
-         m_pFile = NULL;
+         m_pFile = 0;
       }
       return m_bStatus;
    }
@@ -966,7 +966,7 @@ bool compress_image_to_jpeg_file(const char *pFilename, int width, int height, i
        if (!dst_image.process_scanline(pBuf))
           return false;
     }
-    if (!dst_image.process_scanline(NULL))
+    if (!dst_image.process_scanline(0))
        return false;
   }
 
@@ -1004,10 +1004,10 @@ public:
    }
 };
 
-bool compress_image_to_jpeg_file_in_memory(void *pDstBuf, int &buf_size, int width, int height, int num_channels, const uint8 *pImage_data, const params &comp_params)
+bool compress_image_to_jpeg_file_in_memory(void *&pDstBuf, int &buf_size, int width, int height, int num_channels, const uint8 *pImage_data, const params &comp_params)
 {
-   if ((!pDstBuf) || (!buf_size))
-      return false;
+   /*if ((!pDstBuf) || (!buf_size))
+      return false;*/
 
    memory_stream dst_stream(pDstBuf, buf_size);
 
@@ -1025,7 +1025,7 @@ bool compress_image_to_jpeg_file_in_memory(void *pDstBuf, int &buf_size, int wid
         if (!dst_image.process_scanline(pScanline))
            return false;
      }
-     if (!dst_image.process_scanline(NULL))
+     if (!dst_image.process_scanline(0))
         return false;
    }
 

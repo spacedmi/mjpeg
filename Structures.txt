@@ -1,0 +1,42 @@
+AVI Structures:
+MainAVIHeader:
+DWORD dwMicroSecPerFrame;    //  The period between video frames
+DWORD dwMaxBytesPerSec;      //  Maximum data rate of the file
+DWORD dwReserved1;           // 0
+DWORD dwFlags;               //  0x10 AVIF_HASINDEX: The AVI file has an idx1 chunk containing an index at the end of the file.
+DWORD dwTotalFrames;         // Field of the main header specifies the total number of frames of data in file.
+DWORD dwInitialFrames;       // Is used for interleaved files
+DWORD dwStreams;             // Specifies the number of streams in the file.
+DWORD dwSuggestedBufferSize; // Field specifies the suggested buffer size forreading the file
+DWORD dwWidth;               // Fields specify the width of the AVIfile in pixels.
+DWORD dwHeight;              // Fields specify the height of the AVIfile in pixels.
+DWORD dwReserved[4];         // 0, 0, 0, 0
+
+AVIStreamHeader:
+FOURCC fccType;              // 'vids', 'auds', 'txts'...
+FOURCC fccHandler;           // "cvid", "DIB "
+DWORD dwFlags;               // 0
+DWORD dwPriority;            // 0
+DWORD dwInitialFrames;       // 0
+DWORD dwScale;               // 1
+DWORD dwRate;                // Fps (dwRate - frame rate for video streams)
+DWORD dwStart;               // 0
+DWORD dwLength;              // Frames number (playing time of AVI file as defined by scale and rate)
+DWORD dwSuggestedBufferSize; // For reading the stream
+DWORD dwQuality;             // -1 (encoding quality. If set to -1, drivers use the default quality value)
+DWORD dwSampleSize;          // 0 means that each frame is in its own chunk
+RECT rcFrame;                // If stream has a different size than dwWidth*dwHeight(unused)
+
+BITMAPINFOHEADER
+DWORD biSize;                // Write header size of BITMAPINFO header structure
+LONG  biWidth;               // width in pixels
+LONG  biHeight;              // heigth in pixels
+WORD  biPlanes;              // Number of color planes in which the data is stored
+WORD  biBitCount;            // Number of bits per pixel
+DWORD biCompression;         // Type of compression used (uncompressed: NO_COMPRESSION=0)
+DWORD biSizeImage;           // Image Buffer. Quicktime needs 3 bytes also for 8-bit png 
+                                (biCompression==NO_COMPRESSION)?0:xDim*yDim*bytesPerPixel;
+LONG  biXPelsPerMeter;       // Horizontal resolution in pixels per meter
+LONG  biYPelsPerMeter;       // Vertical resolution in pixels per meter
+DWORD biClrUsed;             // 256 (color table size; for 8-bit only)
+DWORD biClrImportant;        // Specifies that the first x colors of the color table. Are important to the DIB.
