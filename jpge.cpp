@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <malloc.h>
+#include <smmintrin.h>
 
 #define JPGE_MAX(a,b) (((a)>(b))?(a):(b))
 #define JPGE_MIN(a,b) (((a)<(b))?(a):(b))
@@ -58,7 +59,12 @@ static uint8 s_ac_chroma_val[AC_CHROMA_CODES] =
 template <class T> inline void clear_obj(T &obj) { memset(&obj, 0, sizeof(obj)); }
 
 const int YR = 19595, YG = 38470, YB = 7471, CB_R = -11059, CB_G = -21709, CB_B = 32768, CR_R = 32768, CR_G = -27439, CR_B = -5329;
-static inline uint8 clamp(int i) { if (static_cast<uint>(i) > 255U) { if (i < 0) i = 0; else if (i > 255) i = 255; } return static_cast<uint8>(i); }
+
+static uint8 clamp_table[1024];
+static bool init_clamp_table = false;
+
+static inline uint8 clamp(int i) { if (static_cast<uint>(i) > 255U) { i = clamp_table[(i)+256]; } return static_cast<uint8>(i); }
+//#define clamp(i) clamp_table[(i)+256]
 
 static void RGB_to_YCC(uint8* pDst, const uint8 *pSrc, int num_pixels)
 {
@@ -69,6 +75,42 @@ static void RGB_to_YCC(uint8* pDst, const uint8 *pSrc, int num_pixels)
     pDst[1] = clamp(128 + ((r * CB_R + g * CB_G + b * CB_B + 32768) >> 16));
     pDst[2] = clamp(128 + ((r * CR_R + g * CR_G + b * CR_B + 32768) >> 16));
   }
+}
+
+static void BGR_to_YCC(uint8* pDst, const uint8 *pSrc, int num_pixels)
+{
+    const __m128i c2_7 = _mm_set1_epi32((int)128);
+    const __m128i c2_15 = _mm_set1_epi32((int)32768);
+    const __m128i c2_4 = _mm_set1_epi32((int)16);
+
+    const __m128i cYR = _mm_set1_epi32(YR);
+    const __m128i cYG = _mm_set1_epi32(YG);
+    const __m128i cYB = _mm_set1_epi32(YB);
+
+    const __m128i cCB_R = _mm_set1_epi32(CB_R);
+    const __m128i cCB_G = _mm_set1_epi32(CB_G);
+    const __m128i cCB_B = _mm_set1_epi32(CB_B);
+
+    const __m128i cCR_R = _mm_set1_epi32(CR_R);
+    const __m128i cCR_G = _mm_set1_epi32(CR_G);
+    const __m128i cCR_B = _mm_set1_epi32(CR_B);
+
+    __m128i R, G, B, Y, Cb, Cr;
+
+    for (; num_pixels; pDst += 12, pSrc += 12, num_pixels += 4)
+    {
+        B = _mm_set_epi32((int)pSrc[0], (int)pSrc[3], (int)pSrc[6], (int)pSrc[9]);
+        G = _mm_set_epi32((int)pSrc[1], (int)pSrc[4], (int)pSrc[7], (int)pSrc[10]);
+        R = _mm_set_epi32((int)pSrc[2], (int)pSrc[5], (int)pSrc[8], (int)pSrc[11]);
+
+        Y = _mm_add_epi32(_mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(R, cYR), _mm_mullo_epi32(G, cYG)), _mm_mullo_epi32(B, cYB)), c2_15);
+        Cb = _mm_add_epi32(_mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(R, cCB_R), _mm_mullo_epi32(G, cCB_G)), _mm_mullo_epi32(B, cCB_B)), c2_15);
+        Cr = _mm_add_epi32(_mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(R, cCR_R), _mm_mullo_epi32(G, cCR_G)), _mm_mullo_epi32(B, cCR_B)), c2_15);
+
+        /*pDst[0] = static_cast<uint8>((r * YR + g * YG + b * YB + 32768) >> 16);
+        pDst[1] = clamp(128 + ((r * CB_R + g * CB_G + b * CB_B + 32768) >> 16));
+        pDst[2] = clamp(128 + ((r * CR_R + g * CR_G + b * CR_B + 32768) >> 16));*/
+    }
 }
 
 static void RGB_to_Y(uint8* pDst, const uint8 *pSrc, int num_pixels)
@@ -821,7 +863,7 @@ void jpeg_encoder::load_mcu(const void *pSrc)
     if (m_image_bpp == 4)
       RGBA_to_YCC(pDst, Psrc, m_image_x);
     else if (m_image_bpp == 3)
-      RGB_to_YCC(pDst, Psrc, m_image_x);
+      BGR_to_YCC(pDst, Psrc, m_image_x);
     else
       Y_to_YCC(pDst, Psrc, m_image_x);
   }
@@ -898,83 +940,6 @@ bool jpeg_encoder::process_scanline(const void* pScanline)
 // Higher level wrappers/examples (optional).
 #include <stdio.h>
 
-class cfile_stream : public output_stream
-{
-   cfile_stream(const cfile_stream &);
-   cfile_stream &operator= (const cfile_stream &);
-
-   FILE* m_pFile;
-   bool m_bStatus;
-
-public:
-   cfile_stream() : m_pFile(0), m_bStatus(false) { }
-
-   virtual ~cfile_stream()
-   {
-      close();
-   }
-
-   bool open(const char *pFilename)
-   {
-      close();
-      m_pFile = fopen(pFilename, "wb");
-      m_bStatus = (m_pFile != 0);
-      return m_bStatus;
-   }
-
-   bool close()
-   {
-      if (m_pFile)
-      {
-         if (fclose(m_pFile) == EOF)
-         {
-            m_bStatus = false;
-         }
-         m_pFile = 0;
-      }
-      return m_bStatus;
-   }
-
-   virtual bool put_buf(const void* pBuf, int len)
-   {
-      m_bStatus = m_bStatus && (fwrite(pBuf, len, 1, m_pFile) == 1);
-      return m_bStatus;
-   }
-
-   uint get_size() const
-   {
-      return m_pFile ? ftell(m_pFile) : 0;
-   }
-};
-
-// Writes JPEG image to file.
-bool compress_image_to_jpeg_file(const char *pFilename, int width, int height, int num_channels, const uint8 *pImage_data, const params &comp_params)
-{
-  cfile_stream dst_stream;
-  if (!dst_stream.open(pFilename))
-    return false;
-
-  jpge::jpeg_encoder dst_image;
-  if (!dst_image.init(&dst_stream, width, height, num_channels, comp_params))
-    return false;
-
-  for (uint pass_index = 0; pass_index < dst_image.get_total_passes(); pass_index++)
-  {
-    for (int i = 0; i < height; i++)
-    {
-       const uint8* pBuf = pImage_data + i * width * num_channels;
-       if (!dst_image.process_scanline(pBuf))
-          return false;
-    }
-    if (!dst_image.process_scanline(0))
-       return false;
-  }
-
-  dst_image.deinit();
-
-  return dst_stream.close();
-}
-
 class memory_stream : public output_stream
 {
    memory_stream(const memory_stream &);
@@ -1006,8 +971,14 @@ public:
 
 bool compress_image_to_jpeg_file_in_memory(void *&pDstBuf, int &buf_size, int width, int height, int num_channels, const uint8 *pImage_data, const params &comp_params)
 {
-   /*if ((!pDstBuf) || (!buf_size))
-      return false;*/
+    if (!init_clamp_table)
+    {
+        for (int i = -256; i < 512; i++)
+            clamp_table[i] = (uint8)(i < 0 ? 0 : i > 255 ? 255 : i);
+    }
+
+   if ((!pDstBuf) || (!buf_size))
+      return false;
 
    memory_stream dst_stream(pDstBuf, buf_size);
 
@@ -1028,9 +999,8 @@ bool compress_image_to_jpeg_file_in_memory(void *&pDstBuf, int &buf_size, int wi
      if (!dst_image.process_scanline(0))
         return false;
    }
-
    dst_image.deinit();
-
+   
    buf_size = dst_stream.get_size();
    return true;
 }

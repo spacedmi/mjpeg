@@ -15,6 +15,7 @@ public:
    void stop();
 
    double get_elapsed_secs() const;
+   timer_ticks get_elapsed_ticks() const;
    inline double get_elapsed_ms() const { return get_elapsed_secs() * 1000.0f; }
    timer_ticks get_elapsed_us() const;
 

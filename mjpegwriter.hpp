@@ -4,42 +4,44 @@
 #include <ctype.h>
 #include <vector>
 
-
-#define AVI 1
-
 using namespace cv;
 using namespace std;
 
-class MjpegWriter
+namespace jcodec
 {
-public:
-    MjpegWriter();
-    int Open(char* outfile, uchar format, uchar fps);
-    int Write(const Mat &Im);
-    int Close();
-    bool isOpened();
-private:
-    FILE * outFile;
-    char* outfileName;
-    int outformat, outfps;
-    int width, height, type, FrameNum;
-    int chunkPointer, moviPointer;
-    vector<int> FrameOffset, FrameSize;
-    // Переменные позиций указателей данных о размерах chunk'ов
-    int FrameNumIndex, FrameNumDwLengthIndex;
-    int AVIChunkSizeIndex[10];
-    int curChunkNum;
 
-    bool isOpen, isRecStarted;
+    class MjpegWriter
+    {
+    public:
+        MjpegWriter();
+        int Open(char* outfile, uchar format, uchar fps);
+        int Write(const Mat &Im);
+        int Close();
+        bool isOpened();
+    private:
+        double tencoding;
+        FILE * outFile;
+        char* outfileName;
+        int outformat, outfps, quality;
+        int width, height, type, FrameNum;
+        int chunkPointer, moviPointer;
+        vector<int> FrameOffset, FrameSize;
+        int FrameNumIndex, FrameNumDwLengthIndex; // Frame number positions
+        int AVIChunkSizeIndex[10];                // Chunk sizes positions
+        int curChunkNum;                          // Current number opened chunks
 
-    int toJPGframe(const uchar * data, uint width, uint height, int step, void *& pBuf);
-    void StartWriteAVI();
-    void WriteStreamHeader();
-    void WriteIndex();
-    void WriteODMLIndex();
-    void FinishWriteAVI();
-    void PutInt(int elem);
-    void PutShort(short elem);
-    void StartWriteChunk(int fourcc);
-    void EndWriteChunk();
-};
+        bool isOpen, isRecStarted;
+
+        int toJPGframe(const uchar * data, uint width, uint height, int step, void *& pBuf);
+        void StartWriteAVI();
+        void WriteStreamHeader();
+        void WriteIndex();
+        bool WriteFrame(const Mat & Im);
+        void WriteODMLIndex();
+        void FinishWriteAVI();
+        void PutInt(int elem);
+        void PutShort(short elem);
+        void StartWriteChunk(int fourcc);
+        void EndWriteChunk();
+    };
+}

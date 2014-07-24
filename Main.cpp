@@ -1,3 +1,4 @@
+#include <opencv2/core/utility.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <iostream>
@@ -235,13 +236,14 @@ static void paint_voronoi(Mat& img, Subdiv2D& subdiv)
 	}
 }
 
+#define TEST_MY 1
 
 int main(int, char**)
 {
 	help();
     srand(22);
 	Scalar active_facet_color(0, 0, 255), delaunay_color(255, 255, 255);
-	Rect rect(0, 0, 800, 800);
+	Rect rect(0, 0, 1920, 1080);
 
 	Subdiv2D subdiv(rect);
 	Mat img(rect.size(), CV_8UC3);
@@ -250,46 +252,46 @@ int main(int, char**)
 	img = Scalar::all(0);
 	string win = "Delaunay Demo";
 	string win2 = "Delaunay Dec Demo";
-	imshow(win, img);
-
-    MjpegWriter * j = new MjpegWriter();
-    j->Open("out.avi", AVI, 20);
-
-	for (int i = 0; i < 100; i++)
-	{
-		Point2f fp((float)(rand() % (rect.width - 10) + 5),
-			(float)(rand() % (rect.height - 10) + 5));
-
-        locate_point(img, subdiv, fp, Scalar(rand() % 255, rand() % 255, rand() % 255));
-		imshow(win, img);
-
-        //test//
-       /* imwrite("test.png", img);
-        encode();
-        img2 = imread("comp.jpg");
-        imshow(win2, img2);*/
-
-		//if (waitKey(10) >= 0)
-			//break;
-
-		subdiv.insert(fp);
-
-		img = Scalar::all(0);
-		draw_subdiv(img, subdiv, delaunay_color);
-		//imshow(win, img);
-        j->Write(img);
-
-		//if (waitKey(100) >= 0)
-			//break;
-	}
-
-    j->Close();
-
-	img = Scalar::all(0);
-	paint_voronoi(img, subdiv);
 	//imshow(win, img);
 
-	//waitKey(0);
+    img = imread("1920x1080.jpg");
+
+    int nframes = 100;
+    jcodec::MjpegWriter * j = new jcodec::MjpegWriter();
+    VideoWriter outputVideo;
+    
+    timer tt;
+    tt.start();
+    double ttotal = 0;
+#if TEST_MY
+    j->Open("out.avi", 1, 10);
+#else
+    outputVideo.open("out2.avi", outputVideo.fourcc('M', 'J', 'P', 'G'), 10.0, img.size(), true);
+#endif
+
+	for (int i = 0; i < nframes; i++)
+	{
+        double tstart = (double)getTickCount();
+
+#if TEST_MY
+        j->Write(img);
+#else
+        outputVideo.write(img);
+#endif
+        double tend = (double)getTickCount();
+        ttotal += tend - tstart;
+        
+        putchar('.');
+        fflush(stdout);
+	}
+
+#if TEST_MY
+    j->Close();
+#else
+    outputVideo.release();
+#endif
+    tt.stop();
+    printf("time per frame (including file i/o)=%.1fms\n", (double)tt.get_elapsed_ms()/nframes);
 
 	return 0;
 }

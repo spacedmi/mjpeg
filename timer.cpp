@@ -99,6 +99,19 @@ double timer::get_elapsed_secs() const
    return delta * g_inv_freq;
 }
 
+timer_ticks timer::get_elapsed_ticks() const
+{
+    assert(m_started);
+    if (!m_started)
+        return 0;
+
+    timer_ticks stop_time = m_stop_time;
+    if (!m_stopped)
+        query_counter(&stop_time);
+
+    return stop_time - m_start_time;
+}
+
 timer_ticks timer::get_elapsed_us() const
 {
    assert(m_started);
