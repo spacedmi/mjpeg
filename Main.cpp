@@ -252,7 +252,6 @@ int main(int, char**)
 	img = Scalar::all(0);
 	string win = "Delaunay Demo";
 	string win2 = "Delaunay Dec Demo";
-	//imshow(win, img);
 
     img = imread("1920x1080.jpg");
 

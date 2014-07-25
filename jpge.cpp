@@ -79,38 +79,129 @@ static void RGB_to_YCC(uint8* pDst, const uint8 *pSrc, int num_pixels)
 
 static void BGR_to_YCC(uint8* pDst, const uint8 *pSrc, int num_pixels)
 {
-    const __m128i c2_7 = _mm_set1_epi32((int)128);
-    const __m128i c2_15 = _mm_set1_epi32((int)32768);
-    const __m128i c2_4 = _mm_set1_epi32((int)16);
+    const int BITS = 10, SCALE = 1 << BITS;
+    const float MAX_M = (float)(1 << (15 - BITS));
+    const short m00 = static_cast<short>(-0.081f * SCALE), m01 = static_cast<short>(-0.419f * SCALE),
+        m02 = static_cast<short>(0.5f * SCALE), m10 = static_cast<short>(0.5f * SCALE),
+        m11 = static_cast<short>(-0.331f * SCALE), m12 = static_cast<short>(-0.169f * SCALE),
+        m20 = static_cast<short>(0.114f * SCALE), m21 = static_cast<short>(0.587f  * SCALE),
+        m22 = static_cast<short>(0.299f * SCALE);
+    int m03 = static_cast<int>((128 + 0.5f) * SCALE), m13 = static_cast<int>((0.5f + 128) * SCALE),
+        m23 = static_cast<int>(0.5f * SCALE);
 
-    const __m128i cYR = _mm_set1_epi32(YR);
-    const __m128i cYG = _mm_set1_epi32(YG);
-    const __m128i cYB = _mm_set1_epi32(YB);
+    __m128i m0 = _mm_setr_epi16(0, m00, m01, m02, m00, m01, m02, 0);
+    __m128i m1 = _mm_setr_epi16(0, m10, m11, m12, m10, m11, m12, 0);
+    __m128i m2 = _mm_setr_epi16(0, m20, m21, m22, m20, m21, m22, 0);
+    __m128i m3 = _mm_setr_epi32(m03, m13, m23, 0);
 
-    const __m128i cCB_R = _mm_set1_epi32(CB_R);
-    const __m128i cCB_G = _mm_set1_epi32(CB_G);
-    const __m128i cCB_B = _mm_set1_epi32(CB_B);
+    int x = 0;
 
-    const __m128i cCR_R = _mm_set1_epi32(CR_R);
-    const __m128i cCR_G = _mm_set1_epi32(CR_G);
-    const __m128i cCR_B = _mm_set1_epi32(CR_B);
-
-    __m128i R, G, B, Y, Cb, Cr;
-
-    for (; num_pixels; pDst += 12, pSrc += 12, num_pixels += 4)
+    for (; x <= (num_pixels - 8) * 3; x += 8 * 3)
     {
-        B = _mm_set_epi32((int)pSrc[0], (int)pSrc[3], (int)pSrc[6], (int)pSrc[9]);
-        G = _mm_set_epi32((int)pSrc[1], (int)pSrc[4], (int)pSrc[7], (int)pSrc[10]);
-        R = _mm_set_epi32((int)pSrc[2], (int)pSrc[5], (int)pSrc[8], (int)pSrc[11]);
+        __m128i z = _mm_setzero_si128(), t0, t1, t2, r0, r1;
+        __m128i v0 = _mm_loadl_epi64((const __m128i*)(pSrc + x));
+        __m128i v1 = _mm_loadl_epi64((const __m128i*)(pSrc + x + 8));
+        __m128i v2 = _mm_loadl_epi64((const __m128i*)(pSrc + x + 16)), v3;
+        v0 = _mm_unpacklo_epi8(v0, z); // b0 g0 r0 b1 g1 r1 b2 g2
+        v1 = _mm_unpacklo_epi8(v1, z); // r2 b3 g3 r3 b4 g4 r4 b5
+        v2 = _mm_unpacklo_epi8(v2, z); // g5 r5 b6 g6 r6 b7 g7 r7
 
-        Y = _mm_add_epi32(_mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(R, cYR), _mm_mullo_epi32(G, cYG)), _mm_mullo_epi32(B, cYB)), c2_15);
-        Cb = _mm_add_epi32(_mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(R, cCB_R), _mm_mullo_epi32(G, cCB_G)), _mm_mullo_epi32(B, cCB_B)), c2_15);
-        Cr = _mm_add_epi32(_mm_add_epi32(_mm_add_epi32(_mm_mullo_epi32(R, cCR_R), _mm_mullo_epi32(G, cCR_G)), _mm_mullo_epi32(B, cCR_B)), c2_15);
+        v3 = _mm_srli_si128(v2, 2); // ? b6 g6 r6 b7 g7 r7 0
+        v2 = _mm_or_si128(_mm_slli_si128(v2, 10), _mm_srli_si128(v1, 6)); // ? b4 g4 r4 b5 g5 r5 ?
+        v1 = _mm_or_si128(_mm_slli_si128(v1, 6), _mm_srli_si128(v0, 10)); // ? b2 g2 r2 b3 g3 r3 ?
+        v0 = _mm_slli_si128(v0, 2); // 0 b0 g0 r0 b1 g1 r1 ?
 
-        /*pDst[0] = static_cast<uint8>((r * YR + g * YG + b * YB + 32768) >> 16);
-        pDst[1] = clamp(128 + ((r * CB_R + g * CB_G + b * CB_B + 32768) >> 16));
-        pDst[2] = clamp(128 + ((r * CR_R + g * CR_G + b * CR_B + 32768) >> 16));*/
+        // process pixels 0 & 1
+        t0 = _mm_madd_epi16(v0, m0); // a0 b0 a1 b1
+        t1 = _mm_madd_epi16(v0, m1); // c0 d0 c1 d1
+        t2 = _mm_madd_epi16(v0, m2); // e0 f0 e1 f1
+        v0 = _mm_unpacklo_epi32(t0, t1); // a0 c0 b0 d0
+        t0 = _mm_unpackhi_epi32(t0, t1); // a1 c1 b1 d1
+        t1 = _mm_unpacklo_epi32(t2, z);  // e0 0 f0 0
+        t2 = _mm_unpackhi_epi32(t2, z);  // e1 0 f1 0
+        r0 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(v0, t1), _mm_unpackhi_epi64(v0, t1)), m3); // B0 G0 R0 0
+        r1 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(t0, t2), _mm_unpackhi_epi64(t0, t2)), m3); // B1 G1 R1 0
+        r0 = _mm_srai_epi32(r0, BITS);
+        r1 = _mm_srai_epi32(r1, BITS);
+        v0 = _mm_packus_epi16(_mm_packs_epi32(_mm_slli_si128(r0, 4), r1), z); // 0 B0 G0 R0 B1 G1 R1 0
+
+        // process pixels 2 & 3
+        t0 = _mm_madd_epi16(v1, m0); // a0 b0 a1 b1
+        t1 = _mm_madd_epi16(v1, m1); // c0 d0 c1 d1
+        t2 = _mm_madd_epi16(v1, m2); // e0 f0 e1 f1
+        v1 = _mm_unpacklo_epi32(t0, t1); // a0 c0 b0 d0
+        t0 = _mm_unpackhi_epi32(t0, t1); // a1 b1 c1 d1
+        t1 = _mm_unpacklo_epi32(t2, z);  // e0 0 f0 0
+        t2 = _mm_unpackhi_epi32(t2, z);  // e1 0 f1 0
+        r0 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(v1, t1), _mm_unpackhi_epi64(v1, t1)), m3); // B2 G2 R2 0
+        r1 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(t0, t2), _mm_unpackhi_epi64(t0, t2)), m3); // B3 G3 R3 0
+        r0 = _mm_srai_epi32(r0, BITS);
+        r1 = _mm_srai_epi32(r1, BITS);
+        v1 = _mm_packus_epi16(_mm_packs_epi32(_mm_slli_si128(r0, 4), r1), z); // 0 B2 G2 R2 B3 G3 R3 0
+
+       //  process pixels 4 & 5
+        t0 = _mm_madd_epi16(v2, m0); // a0 b0 a1 b1
+        t1 = _mm_madd_epi16(v2, m1); // c0 d0 c1 d1
+        t2 = _mm_madd_epi16(v2, m2); // e0 f0 e1 f1
+        v2 = _mm_unpacklo_epi32(t0, t1); // a0 c0 b0 d0
+        t0 = _mm_unpackhi_epi32(t0, t1); // a1 b1 c1 d1
+        t1 = _mm_unpacklo_epi32(t2, z);  // e0 0 f0 0
+        t2 = _mm_unpackhi_epi32(t2, z);  // e1 0 f1 0
+        r0 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(v2, t1), _mm_unpackhi_epi64(v2, t1)), m3); // B4 G4 R4 0
+        r1 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(t0, t2), _mm_unpackhi_epi64(t0, t2)), m3); // B5 G5 R5 0
+        r0 = _mm_srai_epi32(r0, BITS);
+        r1 = _mm_srai_epi32(r1, BITS);
+        v2 = _mm_packus_epi16(_mm_packs_epi32(_mm_slli_si128(r0, 4), r1), z); // 0 B4 G4 R4 B5 G5 R5 0
+
+        // process pixels 6 & 7
+        t0 = _mm_madd_epi16(v3, m0); // a0 b0 a1 b1
+        t1 = _mm_madd_epi16(v3, m1); // c0 d0 c1 d1
+        t2 = _mm_madd_epi16(v3, m2); // e0 f0 e1 f1
+        v3 = _mm_unpacklo_epi32(t0, t1); // a0 c0 b0 d0
+        t0 = _mm_unpackhi_epi32(t0, t1); // a1 b1 c1 d1
+        t1 = _mm_unpacklo_epi32(t2, z);  // e0 0 f0 0
+        t2 = _mm_unpackhi_epi32(t2, z);  // e1 0 f1 0
+        r0 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(v3, t1), _mm_unpackhi_epi64(v3, t1)), m3); // B6 G6 R6 0
+        r1 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(t0, t2), _mm_unpackhi_epi64(t0, t2)), m3); // B7 G7 R7 0
+        r0 = _mm_srai_epi32(r0, BITS);
+        r1 = _mm_srai_epi32(r1, BITS);
+        v3 = _mm_packus_epi16(_mm_packs_epi32(_mm_slli_si128(r0, 4), r1), z); // 0 B6 G6 R6 B7 G7 R7 0
+
+        v0 = _mm_or_si128(_mm_srli_si128(v0, 1), _mm_slli_si128(v1, 5)); // B0 G0 R0 B1 G1 R1 B2 G2
+        v1 = _mm_or_si128(_mm_srli_si128(v1, 3), _mm_slli_si128(v2, 3)); // R2 B3 G3 R3 B4 G4 R4 B5
+        v2 = _mm_or_si128(_mm_srli_si128(v2, 5), _mm_slli_si128(v3, 1)); // G5 R5 B6 G6 R6 B7 G7 R7
+
+        _mm_storel_epi64((__m128i*)(pDst + x), v0);
+        _mm_storel_epi64((__m128i*)(pDst + x + 8), v1);
+        _mm_storel_epi64((__m128i*)(pDst + x + 16), v2);
+
+        // Reverse gbr->rgb
+        uint tmp;
+        for (int i = 0; i < 24; i += 3)
+        {
+            tmp = *(pDst + x + (i + 2));
+            *(pDst + x + (i + 2)) = *(pDst + x + i);
+            *(pDst + x + i) = tmp;
+        }
     }
+    for (; x < num_pixels * 3; x += 3)
+    {
+        int v0 = pSrc[x], v1 = pSrc[x + 1], v2 = pSrc[x + 2];
+        uint8 t0 = clamp((m00*v0 + m01*v1 + m02*v2 + m03) >> BITS);
+        uint8 t1 = clamp((m10*v0 + m11*v1 + m12*v2 + m13) >> BITS);
+        uint8 t2 = static_cast<uint8>((m20*v0 + m21*v1 + m22*v2 + m23) >> BITS);
+        pDst[x] = t2; pDst[x + 1] = t1; pDst[x + 2] = t0;
+    }
+    return;
+
+    /*for (; num_pixels; pDst += 3, pSrc += 3, num_pixels--)
+    {
+
+        const int b = pSrc[0], g = pSrc[1], r = pSrc[2];
+        pDst[0] = static_cast<uint8>((r * YR + g * YG + b * YB + 32768) >> 16);
+        pDst[1] = clamp(128 + ((r * CB_R + g * CB_G + b * CB_B + 32768) >> 16));
+        pDst[2] = clamp(128 + ((r * CR_R + g * CR_G + b * CR_B + 32768) >> 16));
+    }*/
 }
 
 static void RGB_to_Y(uint8* pDst, const uint8 *pSrc, int num_pixels)
