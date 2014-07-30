@@ -1,17 +1,13 @@
 #include <opencv2/core/utility.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/highgui/highgui.hpp>
-#include <iostream>
-#include "jpge.hpp"
 #include "timer.hpp"
 #include "mjpegwriter.hpp"
-#include "stb_image.cpp"
-#include <ctype.h>
 
 using namespace cv;
 using namespace std;
 
-#define TEST_MY 1
+#define TEST_MY 0
 
 int main(int, char**)
 {
@@ -19,7 +15,7 @@ int main(int, char**)
 	Mat img(rect.size(), CV_8UC3);
     img = imread("1920x1080.jpg");
     img.size();
-    int nframes = 10;
+    int nframes = 100;
     jcodec::MjpegWriter * j = new jcodec::MjpegWriter();
     VideoWriter outputVideo;
     
