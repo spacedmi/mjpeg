@@ -467,38 +467,21 @@ void jpeg_encoder::DCT2D()
         {
             int c;
             int *q = m_sample_array;
-#if !(SSE)
             uchar *q_uchar = m_sample_array_uchar;
             for (c = 7; c >= 0; c--, q += 8, q_uchar += 8)
             {
-                int s0 = (int)q_uchar[0], s1 = (int)q_uchar[1], s2 = (int)q_uchar[2], s3 = (int)q_uchar[3], s4 = (int)q_uchar[4], s5 = (int)q_uchar[5], s6 = (int)q_uchar[6], s7 = (int)q_uchar[7];
+                int s0 = (int)q_uchar[0] - 128, s1 = (int)q_uchar[1] - 128, s2 = (int)q_uchar[2] - 128, s3 = (int)q_uchar[3] - 128, s4 = (int)q_uchar[4] - 128, s5 = (int)q_uchar[5] - 128, s6 = (int)q_uchar[6] - 128, s7 = (int)q_uchar[7] - 128;
                 DCT1D(s0, s1, s2, s3, s4, s5, s6, s7);
                 q[0] = s0 << ROW_BITS; q[1] = DCT_DESCALE(s1, CONST_BITS - ROW_BITS); q[2] = DCT_DESCALE(s2, CONST_BITS - ROW_BITS); q[3] = DCT_DESCALE(s3, CONST_BITS - ROW_BITS);
                 q[4] = s4 << ROW_BITS; q[5] = DCT_DESCALE(s5, CONST_BITS - ROW_BITS); q[6] = DCT_DESCALE(s6, CONST_BITS - ROW_BITS); q[7] = DCT_DESCALE(s7, CONST_BITS - ROW_BITS);
             }
             for (q = m_sample_array, q_uchar = m_sample_array_uchar, c = 7; c >= 0; c--, q++, q_uchar++)
             {
-                int s0 = (int)q_uchar[0 * 8], s1 = (int)q_uchar[1 * 8], s2 = (int)q_uchar[2 * 8], s3 = (int)q_uchar[3 * 8], s4 = (int)q_uchar[4 * 8], s5 = (int)q_uchar[5 * 8], s6 = (int)q_uchar[6 * 8], s7 = (int)q_uchar[7 * 8];
-                DCT1D(s0, s1, s2, s3, s4, s5, s6, s7);
-                q[0 * 8] = DCT_DESCALE(s0, ROW_BITS + 3); q[1 * 8] = DCT_DESCALE(s1, CONST_BITS + ROW_BITS + 3); q[2 * 8] = DCT_DESCALE(s2, CONST_BITS + ROW_BITS + 3); q[3 * 8] = DCT_DESCALE(s3, CONST_BITS + ROW_BITS + 3);
-                q[4 * 8] = DCT_DESCALE(s4, ROW_BITS + 3); q[5 * 8] = DCT_DESCALE(s5, CONST_BITS + ROW_BITS + 3); q[6 * 8] = DCT_DESCALE(s6, CONST_BITS + ROW_BITS + 3); q[7 * 8] = DCT_DESCALE(s7, CONST_BITS + ROW_BITS + 3);
-            }
-#else
-            for (c = 7; c >= 0; c--, q += 8)
-            {
-                int s0 = q[0], s1 = q[1], s2 = q[2], s3 = q[3], s4 = q[4], s5 = q[5], s6 = q[6], s7 = q[7];
-                DCT1D(s0, s1, s2, s3, s4, s5, s6, s7);
-                q[0] = s0  << ROW_BITS; q[1] = DCT_DESCALE(s1, CONST_BITS - ROW_BITS); q[2] = DCT_DESCALE(s2, CONST_BITS - ROW_BITS); q[3] = DCT_DESCALE(s3, CONST_BITS - ROW_BITS);
-                q[4] = s4 << ROW_BITS; q[5] = DCT_DESCALE(s5, CONST_BITS - ROW_BITS); q[6] = DCT_DESCALE(s6, CONST_BITS - ROW_BITS); q[7] = DCT_DESCALE(s7, CONST_BITS - ROW_BITS);
-            }
-            for (q = m_sample_array, c = 7; c >= 0; c--, q++)
-            {
                 int s0 = q[0 * 8], s1 = q[1 * 8], s2 = q[2 * 8], s3 = q[3 * 8], s4 = q[4 * 8], s5 = q[5 * 8], s6 = q[6 * 8], s7 = q[7 * 8];
                 DCT1D(s0, s1, s2, s3, s4, s5, s6, s7);
                 q[0 * 8] = DCT_DESCALE(s0, ROW_BITS + 3); q[1 * 8] = DCT_DESCALE(s1, CONST_BITS + ROW_BITS + 3); q[2 * 8] = DCT_DESCALE(s2, CONST_BITS + ROW_BITS + 3); q[3 * 8] = DCT_DESCALE(s3, CONST_BITS + ROW_BITS + 3);
                 q[4 * 8] = DCT_DESCALE(s4, ROW_BITS + 3); q[5 * 8] = DCT_DESCALE(s5, CONST_BITS + ROW_BITS + 3); q[6 * 8] = DCT_DESCALE(s6, CONST_BITS + ROW_BITS + 3); q[7 * 8] = DCT_DESCALE(s7, CONST_BITS + ROW_BITS + 3);
             }
-#endif
         }
 
         struct sym_freq { uint m_key, m_sym_index; };
@@ -779,7 +762,6 @@ void jpeg_encoder::DCT2D()
         void jpeg_encoder::load_block_8_8(int x, int y)
         {
 #if SSE
-            uchar *pSrc;
             uchar *pDst = m_sample_array_uchar;
             x <<= 3;
             y <<= 3;
@@ -787,29 +769,18 @@ void jpeg_encoder::DCT2D()
             __m128i str;
             for (int i = 0; i < 8; i++, pDst += 8)
             {
-                pSrc = m_mcu_linesY[y + i] + x;
-                str = _mm_loadl_epi64((const __m128i*)pSrc);
-                //str = _mm_sub_epi8(str, shift_128);
+                str = _mm_loadl_epi64((const __m128i*)(m_mcu_linesY[y + i] + x));
                 _mm_storel_epi64((__m128i*)pDst, str);
             }
 
-            ///////////////////////////////////////
-            pDst = m_sample_array_uchar;
-            int *pDst_true = m_sample_array;
-            for (int i = 0; i < 64; i++)
-                *pDst_true++ = (int)(*pDst++) - 128;
 
 #else
-            uchar *pSrc;
-            sample_array_t *pDst = m_sample_array;
+            uchar *pDst = m_sample_array_uchar;
             x <<= 3;
             y <<= 3;
+            const int n_bytes = 8;
             for (int i = 0; i < 8; i++, pDst += 8)
-            {
-                pSrc = m_mcu_linesY[y + i] + x;
-                pDst[0] = pSrc[0] - 128; pDst[1] = pSrc[1] - 128; pDst[2] = pSrc[2] - 128; pDst[3] = pSrc[3] - 128;
-                pDst[4] = pSrc[4] - 128; pDst[5] = pSrc[5] - 128; pDst[6] = pSrc[6] - 128; pDst[7] = pSrc[7] - 128;
-            }
+                memcpy(pDst, m_mcu_linesY[y + i] + x, n_bytes);
 #endif
         }
         void jpeg_encoder::load_block_16_8(int x, int comp)
@@ -823,7 +794,6 @@ void jpeg_encoder::DCT2D()
                 pSrc = m_mcu_linesCr;
 #if SSE
             uchar *pDst = m_sample_array_uchar;
-            __m128i shift_128 = _mm_set1_epi8((char)128);
             __m128i r0, r1, a0, b0, a1, b1, res0, res1; 
             __m128i z = _mm_setzero_si128(), mask = _mm_set1_epi16(255), delta = _mm_set1_epi16(2);
 
@@ -854,24 +824,16 @@ void jpeg_encoder::DCT2D()
                 
                 _mm_storeu_si128((__m128i*)pDst, _mm_packus_epi16(res0, res1));
             }
-
-            ////////////////////////////////////
-            pDst = m_sample_array_uchar;
-            int *pDst_true = m_sample_array;
-            for (int i = 0; i < 64; i++)
-            {
-                *pDst_true++ = (int)(*pDst++) - 128;
-            }
 #else
-            int *pDst = m_sample_array;
+            uchar *pDst = m_sample_array_uchar;
             for (int i = 0; i < 16; i += 2, pDst += 8)
             {
                 pSrc1 = pSrc[i + 0] + x;
                 pSrc2 = pSrc[i + 1] + x;
-                pDst[0] = ((pSrc1[0] + pSrc1[1] + pSrc2[0] + pSrc2[1] + a) >> 2) - 128; pDst[1] = ((pSrc1[2] + pSrc1[3] + pSrc2[2] + pSrc2[3] + b) >> 2) - 128;
-                pDst[2] = ((pSrc1[4] + pSrc1[5] + pSrc2[4] + pSrc2[5] + a) >> 2) - 128; pDst[3] = ((pSrc1[6] + pSrc1[7] + pSrc2[6] + pSrc2[7] + b) >> 2) - 128;
-                pDst[4] = ((pSrc1[8] + pSrc1[9] + pSrc2[8] + pSrc2[9] + a) >> 2) - 128; pDst[5] = ((pSrc1[10] + pSrc1[11] + pSrc2[10] + pSrc2[11] + b) >> 2) - 128;
-                pDst[6] = ((pSrc1[12] + pSrc1[13] + pSrc2[12] + pSrc2[13] + a) >> 2) - 128; pDst[7] = ((pSrc1[14] + pSrc1[15] + pSrc2[14] + pSrc2[15] + b) >> 2) - 128;
+                pDst[0] = (uchar)((pSrc1[0] + pSrc1[1] + pSrc2[0] + pSrc2[1] + a) >> 2); pDst[1] = (uchar)((pSrc1[2] + pSrc1[3] + pSrc2[2] + pSrc2[3] + b) >> 2);
+                pDst[2] = (uchar)((pSrc1[4] + pSrc1[5] + pSrc2[4] + pSrc2[5] + a) >> 2); pDst[3] = (uchar)((pSrc1[6] + pSrc1[7] + pSrc2[6] + pSrc2[7] + b) >> 2);
+                pDst[4] = (uchar)((pSrc1[8] + pSrc1[9] + pSrc2[8] + pSrc2[9] + a) >> 2); pDst[5] = (uchar)((pSrc1[10] + pSrc1[11] + pSrc2[10] + pSrc2[11] + b) >> 2);
+                pDst[6] = (uchar)((pSrc1[12] + pSrc1[13] + pSrc2[12] + pSrc2[13] + a) >> 2); pDst[7] = (uchar)((pSrc1[14] + pSrc1[15] + pSrc2[14] + pSrc2[15] + b) >> 2);
                 int temp = a; a = b; b = temp;
             }
 #endif
