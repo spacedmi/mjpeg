@@ -14,16 +14,17 @@ namespace jcodec{
     static const int STREAMS = 1;
     static const int AVIH_STRH_SIZE = 56;
     static const int STRF_SIZE = 40;
-    static const int AVI_DWFLAG = 16;
+    static const int AVI_DWFLAG = 0x00000910;
     static const int AVI_DWSCALE = 1;
     static const int AVI_DWQUALITY = -1;
     static const int AVI_BITS_PER_PIXEL = 24;
     static const int AVI_BIPLANES = 1;
-    static const int AVI_BICLRUSED = 256;
     static const int JUNK_SEEK = 4096;
     static const int AVIIF_KEYFRAME = 0x10;
-    
-    MjpegWriter::MjpegWriter() : isOpen(false), outFile(0), outformat(1), outfps(20), curChunkNum(0),
+    static const int MAX_BYTES_PER_SEC = 15552000;
+    static const int SUG_BUFFER_SIZE = 1048576;
+
+    MjpegWriter::MjpegWriter() : isOpen(false), outFile(0), outformat(1), outfps(20),
         FrameNum(0), quality(80), NumOfChunks(10) {}
 
     int MjpegWriter::Open(char* outfile, uchar fps, Size ImSize)
@@ -33,7 +34,6 @@ namespace jcodec{
         if (fps < 1) return -3;
         if (!(outFile = fopen(outfile, "wb+")))
             return -1;
-        AVIChunkSizeIndex = new int[NumOfChunks];
         outfps = fps;
         width = ImSize.width;
         height = ImSize.height;
@@ -48,12 +48,13 @@ namespace jcodec{
 
     int MjpegWriter::Close()
     {
+        if (outFile == 0) return -1;
         if (FrameNum == 0)
         {
             remove(outfileName);
             isOpen = false;
             if (fclose(outFile))
-                return -1;
+                return -2;
             return 1;
         }
         printf("encoding time per frame = %.1fms\n", tencoding * 1000 / FrameNum / getTickFrequency());
@@ -64,8 +65,6 @@ namespace jcodec{
             return -1;
         isOpen = false;
         FrameNum = 0;
-        curChunkNum = 0;
-        delete[] AVIChunkSizeIndex;
         return 1;
     }
 
@@ -91,13 +90,14 @@ namespace jcodec{
         PutInt(fourCC('a', 'v', 'i', 'h'));
         PutInt(AVIH_STRH_SIZE);
         PutInt((int)(NUM_MICROSEC_PER_SEC / outfps));
-        PutInt(0);
+        PutInt(MAX_BYTES_PER_SEC);
         PutInt(0);
         PutInt(AVI_DWFLAG);
+        FrameNumIndexes.push_back(ftell(outFile));
         PutInt(0);
         PutInt(0);
         PutInt(STREAMS);
-        PutInt(0);
+        PutInt(SUG_BUFFER_SIZE);
         PutInt(width);
         PutInt(height);
         PutInt(0);
@@ -121,15 +121,15 @@ namespace jcodec{
         PutInt(AVI_DWSCALE);
         PutInt(outfps);
         PutInt(0);
-        FrameNumDwLengthIndex = ftell(outFile);
+        FrameNumIndexes.push_back(ftell(outFile));
         PutInt(0);
-        PutInt(0);
+        PutInt(SUG_BUFFER_SIZE);
         PutInt(AVI_DWQUALITY);
         PutInt(0);
         PutShort(0);
         PutShort(0);
-        PutShort(0);
-        PutShort(0);
+        PutShort(width);
+        PutShort(height);
         // strf (use the BITMAPINFOHEADER for video)
         StartWriteChunk(fourCC('s', 't', 'r', 'f'));
         PutInt(STRF_SIZE);
@@ -141,11 +141,24 @@ namespace jcodec{
         PutInt(width * height * 3);
         PutInt(0);
         PutInt(0);
-        PutInt(AVI_BICLRUSED);
         PutInt(0);
+        PutInt(0);
+        // Must be indx chunk
         EndWriteChunk(); // end strf
         EndWriteChunk(); // end strl
+
+        // odml
+        StartWriteChunk(fourCC('L', 'I', 'S', 'T'));
+        PutInt(fourCC('o', 'd', 'm', 'l'));
+        StartWriteChunk(fourCC('d', 'm', 'l', 'h'));
+        FrameNumIndexes.push_back(ftell(outFile));
+        PutInt(0);
+        PutInt(0);
+        EndWriteChunk(); // end dmlh
+        EndWriteChunk(); // end odml
+
         EndWriteChunk(); // end hdrl
+
         // JUNK
         StartWriteChunk(fourCC('J', 'U', 'N', 'K'));
         fseek(outFile, JUNK_SEEK, SEEK_SET);
@@ -202,13 +215,16 @@ namespace jcodec{
 
     void MjpegWriter::FinishWriteAVI()
     {
+        // Record frames numbers to AVI Header
+        long curPointer = ftell(outFile);
+        while (!FrameNumIndexes.empty())
+        {
+            fseek(outFile, FrameNumIndexes.back(), SEEK_SET);
+            PutInt(FrameNum);
+            FrameNumIndexes.pop_back();
+        }
+        fseek(outFile, curPointer, SEEK_SET);
         EndWriteChunk(); // end RIFF
-        // Record frames number to AVI Header
-        fseek(outFile, FrameNumIndex, SEEK_SET);
-        PutInt(FrameNum);
-        // Record frames number to Stream Header
-        fseek(outFile, FrameNumDwLengthIndex, SEEK_SET);
-        PutInt(FrameNum);
     }
 
     void MjpegWriter::PutInt(int elem)
@@ -235,17 +251,20 @@ namespace jcodec{
             fpos = ftell(outFile);
             PutInt(0);
         }
-        AVIChunkSizeIndex[curChunkNum++] = (uint)fpos;
+        AVIChunkSizeIndex.push_back((int)fpos);
     }
 
     void MjpegWriter::EndWriteChunk()
     {
-        curChunkNum--;
-        long curPointer = ftell(outFile);
-        fseek(outFile, AVIChunkSizeIndex[curChunkNum], SEEK_SET);
-        int size = (int)(curPointer - (AVIChunkSizeIndex[curChunkNum] + 4));
-        PutInt(size);
-        fseek(outFile, curPointer, SEEK_SET);
+        if (!AVIChunkSizeIndex.empty())
+        {
+            long curPointer = ftell(outFile);
+            fseek(outFile, AVIChunkSizeIndex.back(), SEEK_SET);
+            int size = (int)(curPointer - (AVIChunkSizeIndex.back() + 4));
+            PutInt(size);
+            fseek(outFile, curPointer, SEEK_SET);
+            AVIChunkSizeIndex.pop_back();
+        }
     }
 
     int MjpegWriter::toJPGframe(const uchar * data, uint width, uint height, int step, void *& pBuf)
@@ -330,6 +349,7 @@ namespace jcodec{
             __m128i z = _mm_setzero_si128(), t0, t1, t2, r0, r1, v0, v1, v2, v3;
             int x = 0;
 
+#if SSE
             for (; x <= (num_pixels - 8) * 3; x += 8 * 3, pDstCr += 8, pDstCb += 8, pDstY += 8)
             {
                 v0 = _mm_loadl_epi64((const __m128i*)(pSrc + x));
@@ -410,7 +430,6 @@ namespace jcodec{
                 v2 = _mm_unpacklo_epi16(r0, v3); // V4 V5 V6 V7 U4 U5 U6 U7
                 v3 = _mm_unpackhi_epi16(r0, v3); // Y4 Y5 Y6 Y7 0 0 0 0
 
-
                 t0 = _mm_unpacklo_epi64(v0, v2); // V0 ... V7
                 t1 = _mm_unpackhi_epi64(v0, v2); // U0 ... U7
                 t2 = _mm_unpacklo_epi64(v1, v3); // Y0 ... Y7
@@ -419,7 +438,7 @@ namespace jcodec{
                 _mm_storel_epi64((__m128i*)pDstCb, _mm_packus_epi16(t1, t1));
                 _mm_storel_epi64((__m128i*)pDstY, _mm_packus_epi16(t2, t2));
             }
-
+#endif
             for (; x < num_pixels * 3; x += 3)
             {
                 int v0 = pSrc[x], v1 = pSrc[x + 1], v2 = pSrc[x + 2];
@@ -463,14 +482,15 @@ namespace jcodec{
     u3 += z5; u4 += z5; \
     s0 = t10 + t11; s1 = t7 + u1 + u4; s3 = t6 + u2 + u3; s4 = t10 - t11; s5 = t5 + u2 + u4; s7 = t4 + u1 + u3;
 
-void jpeg_encoder::DCT2D()
+        void jpeg_encoder::DCT2D(int comp)
         {
-            int c;
+            int c, shift = 128;
             int *q = m_sample_array;
             uchar *q_uchar = m_sample_array_uchar;
             for (c = 7; c >= 0; c--, q += 8, q_uchar += 8)
             {
-                int s0 = (int)q_uchar[0] - 128, s1 = (int)q_uchar[1] - 128, s2 = (int)q_uchar[2] - 128, s3 = (int)q_uchar[3] - 128, s4 = (int)q_uchar[4] - 128, s5 = (int)q_uchar[5] - 128, s6 = (int)q_uchar[6] - 128, s7 = (int)q_uchar[7] - 128;
+                int s0 = (int)q_uchar[0] - shift, s1 = (int)q_uchar[1] - shift, s2 = (int)q_uchar[2] - shift, s3 = (int)q_uchar[3] - shift,
+                    s4 = (int)q_uchar[4] - shift, s5 = (int)q_uchar[5] - shift, s6 = (int)q_uchar[6] - shift, s7 = (int)q_uchar[7] - shift;
                 DCT1D(s0, s1, s2, s3, s4, s5, s6, s7);
                 q[0] = s0 << ROW_BITS; q[1] = DCT_DESCALE(s1, CONST_BITS - ROW_BITS); q[2] = DCT_DESCALE(s2, CONST_BITS - ROW_BITS); q[3] = DCT_DESCALE(s3, CONST_BITS - ROW_BITS);
                 q[4] = s4 << ROW_BITS; q[5] = DCT_DESCALE(s5, CONST_BITS - ROW_BITS); q[6] = DCT_DESCALE(s6, CONST_BITS - ROW_BITS); q[7] = DCT_DESCALE(s7, CONST_BITS - ROW_BITS);
@@ -685,39 +705,10 @@ void jpeg_encoder::DCT2D()
         bool jpeg_encoder::jpg_open(int p_x_res, int p_y_res, int src_channels)
         {
             m_num_components = 3;
-            switch (m_params.m_subsampling)
-            {
-            case Y_ONLY:
-            {
-                           m_num_components = 1;
-                           m_comp_h_samp[0] = 1; m_comp_v_samp[0] = 1;
-                           m_mcu_x = 8; m_mcu_y = 8;
-                           break;
-            }
-            case H1V1:
-            {
-                         m_comp_h_samp[0] = 1; m_comp_v_samp[0] = 1;
-                         m_comp_h_samp[1] = 1; m_comp_v_samp[1] = 1;
-                         m_comp_h_samp[2] = 1; m_comp_v_samp[2] = 1;
-                         m_mcu_x = 8; m_mcu_y = 8;
-                         break;
-            }
-            case H2V1:
-            {
-                         m_comp_h_samp[0] = 2; m_comp_v_samp[0] = 1;
-                         m_comp_h_samp[1] = 1; m_comp_v_samp[1] = 1;
-                         m_comp_h_samp[2] = 1; m_comp_v_samp[2] = 1;
-                         m_mcu_x = 16; m_mcu_y = 8;
-                         break;
-            }
-            case H2V2:
-            {
-                         m_comp_h_samp[0] = 2; m_comp_v_samp[0] = 2;
-                         m_comp_h_samp[1] = 1; m_comp_v_samp[1] = 1;
-                         m_comp_h_samp[2] = 1; m_comp_v_samp[2] = 1;
-                         m_mcu_x = 16; m_mcu_y = 16;
-            }
-            }
+            m_comp_h_samp[0] = 2; m_comp_v_samp[0] = 2;
+            m_comp_h_samp[1] = 1; m_comp_v_samp[1] = 1;
+            m_comp_h_samp[2] = 1; m_comp_v_samp[2] = 1;
+            m_mcu_x = 16; m_mcu_y = 16;
 
             m_image_x = p_x_res; m_image_y = p_y_res;
             m_image_bpp = src_channels;
@@ -765,7 +756,6 @@ void jpeg_encoder::DCT2D()
             uchar *pDst = m_sample_array_uchar;
             x <<= 3;
             y <<= 3;
-            __m128i shift_128 = _mm_set1_epi8((char)128);
             __m128i str;
             for (int i = 0; i < 8; i++, pDst += 8)
             {
@@ -952,7 +942,7 @@ void jpeg_encoder::DCT2D()
 
         void jpeg_encoder::code_block(int component_num)
         {
-            DCT2D();
+            DCT2D(component_num);
             load_quantized_coefficients(component_num);
             code_coefficients_pass_two(component_num);
         }

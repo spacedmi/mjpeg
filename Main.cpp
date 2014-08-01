@@ -15,7 +15,7 @@ int main(int, char**)
 	Mat img(rect.size(), CV_8UC3);
     img = imread("1920x1080.jpg");
     img.size();
-    int nframes = 100;
+    int nframes = 10;
     jcodec::MjpegWriter * j = new jcodec::MjpegWriter();
     VideoWriter outputVideo;
     
