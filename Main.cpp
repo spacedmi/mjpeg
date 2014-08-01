@@ -1,12 +1,8 @@
 #include <opencv2/core/utility.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/highgui/highgui.hpp>
-#include <iostream>
-#include "jpge.hpp"
 #include "timer.hpp"
 #include "mjpegwriter.hpp"
-#include "stb_image.cpp"
-#include <ctype.h>
 
 using namespace cv;
 using namespace std;

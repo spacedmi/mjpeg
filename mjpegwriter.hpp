@@ -61,10 +61,7 @@ namespace jcodec
         int outformat, outfps, quality;
         int width, height, type, FrameNum;
         int chunkPointer, moviPointer;
-        vector<int> FrameOffset, FrameSize;
-        int FrameNumIndex, FrameNumDwLengthIndex; // Frame number positions
-        int *AVIChunkSizeIndex;                   // Chunk sizes positions
-        int curChunkNum;                          // Current number opened chunks
+        vector<int> FrameOffset, FrameSize, AVIChunkSizeIndex, FrameNumIndexes;
         bool isOpen;
 
         int toJPGframe(const uchar * data, uint width, uint height, int step, void *& pBuf);
@@ -132,6 +129,7 @@ namespace jcodec
         uchar *m_mcu_linesCr[16];
         uchar m_mcu_y_ofs;
         sample_array_t m_sample_array[64];
+        uchar m_sample_array_uchar[64];
         short m_coefficient_array[64];
         int m_quantization_tables[2][64];
         uint m_huff_codes[4][256];
@@ -167,6 +165,7 @@ namespace jcodec
         bool jpg_open(int p_x_res, int p_y_res, int src_channels);
         void load_block_8_8(int x, int y);
         void load_block_16_8(int x, int comp);
+        void DCT2D(int component_num);
         void load_quantized_coefficients(int component_num);
         void flush_output_buffer();
         void put_bits(uint bits, uint len);

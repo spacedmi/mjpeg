@@ -5,6 +5,8 @@
 
 namespace jcodec{
 
+#define SSE 1
+
 #define fourCC(a,b,c,d) ( (int) ((uchar(d)<<24) | (uchar(c)<<16) | (uchar(b)<<8) | uchar(a)) )
 #define DIM(arr) (sizeof(arr)/sizeof(arr[0]))
 
@@ -12,16 +14,17 @@ namespace jcodec{
     static const int STREAMS = 1;
     static const int AVIH_STRH_SIZE = 56;
     static const int STRF_SIZE = 40;
-    static const int AVI_DWFLAG = 16;
+    static const int AVI_DWFLAG = 0x00000910;
     static const int AVI_DWSCALE = 1;
     static const int AVI_DWQUALITY = -1;
     static const int AVI_BITS_PER_PIXEL = 24;
     static const int AVI_BIPLANES = 1;
-    static const int AVI_BICLRUSED = 256;
     static const int JUNK_SEEK = 4096;
     static const int AVIIF_KEYFRAME = 0x10;
-    
-    MjpegWriter::MjpegWriter() : isOpen(false), outFile(0), outformat(1), outfps(20), curChunkNum(0),
+    static const int MAX_BYTES_PER_SEC = 15552000;
+    static const int SUG_BUFFER_SIZE = 1048576;
+
+    MjpegWriter::MjpegWriter() : isOpen(false), outFile(0), outformat(1), outfps(20),
         FrameNum(0), quality(80), NumOfChunks(10) {}
 
     int MjpegWriter::Open(char* outfile, uchar fps, Size ImSize)
@@ -31,7 +34,6 @@ namespace jcodec{
         if (fps < 1) return -3;
         if (!(outFile = fopen(outfile, "wb+")))
             return -1;
-        AVIChunkSizeIndex = new int[NumOfChunks];
         outfps = fps;
         width = ImSize.width;
         height = ImSize.height;
@@ -46,12 +48,13 @@ namespace jcodec{
 
     int MjpegWriter::Close()
     {
+        if (outFile == 0) return -1;
         if (FrameNum == 0)
         {
             remove(outfileName);
             isOpen = false;
             if (fclose(outFile))
-                return -1;
+                return -2;
             return 1;
         }
         printf("encoding time per frame = %.1fms\n", tencoding * 1000 / FrameNum / getTickFrequency());
@@ -62,8 +65,6 @@ namespace jcodec{
             return -1;
         isOpen = false;
         FrameNum = 0;
-        curChunkNum = 0;
-        delete[] AVIChunkSizeIndex;
         return 1;
     }
 
@@ -89,13 +90,14 @@ namespace jcodec{
         PutInt(fourCC('a', 'v', 'i', 'h'));
         PutInt(AVIH_STRH_SIZE);
         PutInt((int)(NUM_MICROSEC_PER_SEC / outfps));
-        PutInt(0);
+        PutInt(MAX_BYTES_PER_SEC);
         PutInt(0);
         PutInt(AVI_DWFLAG);
+        FrameNumIndexes.push_back(ftell(outFile));
         PutInt(0);
         PutInt(0);
         PutInt(STREAMS);
-        PutInt(0);
+        PutInt(SUG_BUFFER_SIZE);
         PutInt(width);
         PutInt(height);
         PutInt(0);
@@ -119,15 +121,15 @@ namespace jcodec{
         PutInt(AVI_DWSCALE);
         PutInt(outfps);
         PutInt(0);
-        FrameNumDwLengthIndex = ftell(outFile);
+        FrameNumIndexes.push_back(ftell(outFile));
         PutInt(0);
-        PutInt(0);
+        PutInt(SUG_BUFFER_SIZE);
         PutInt(AVI_DWQUALITY);
         PutInt(0);
         PutShort(0);
         PutShort(0);
-        PutShort(0);
-        PutShort(0);
+        PutShort(width);
+        PutShort(height);
         // strf (use the BITMAPINFOHEADER for video)
         StartWriteChunk(fourCC('s', 't', 'r', 'f'));
         PutInt(STRF_SIZE);
@@ -139,11 +141,24 @@ namespace jcodec{
         PutInt(width * height * 3);
         PutInt(0);
         PutInt(0);
-        PutInt(AVI_BICLRUSED);
         PutInt(0);
+        PutInt(0);
+        // Must be indx chunk
         EndWriteChunk(); // end strf
         EndWriteChunk(); // end strl
+
+        // odml
+        StartWriteChunk(fourCC('L', 'I', 'S', 'T'));
+        PutInt(fourCC('o', 'd', 'm', 'l'));
+        StartWriteChunk(fourCC('d', 'm', 'l', 'h'));
+        FrameNumIndexes.push_back(ftell(outFile));
+        PutInt(0);
+        PutInt(0);
+        EndWriteChunk(); // end dmlh
+        EndWriteChunk(); // end odml
+
         EndWriteChunk(); // end hdrl
+
         // JUNK
         StartWriteChunk(fourCC('J', 'U', 'N', 'K'));
         fseek(outFile, JUNK_SEEK, SEEK_SET);
@@ -200,13 +215,16 @@ namespace jcodec{
 
     void MjpegWriter::FinishWriteAVI()
     {
+        // Record frames numbers to AVI Header
+        long curPointer = ftell(outFile);
+        while (!FrameNumIndexes.empty())
+        {
+            fseek(outFile, FrameNumIndexes.back(), SEEK_SET);
+            PutInt(FrameNum);
+            FrameNumIndexes.pop_back();
+        }
+        fseek(outFile, curPointer, SEEK_SET);
         EndWriteChunk(); // end RIFF
-        // Record frames number to AVI Header
-        fseek(outFile, FrameNumIndex, SEEK_SET);
-        PutInt(FrameNum);
-        // Record frames number to Stream Header
-        fseek(outFile, FrameNumDwLengthIndex, SEEK_SET);
-        PutInt(FrameNum);
     }
 
     void MjpegWriter::PutInt(int elem)
@@ -233,17 +251,20 @@ namespace jcodec{
             fpos = ftell(outFile);
             PutInt(0);
         }
-        AVIChunkSizeIndex[curChunkNum++] = (uint)fpos;
+        AVIChunkSizeIndex.push_back((int)fpos);
     }
 
     void MjpegWriter::EndWriteChunk()
     {
-        curChunkNum--;
-        long curPointer = ftell(outFile);
-        fseek(outFile, AVIChunkSizeIndex[curChunkNum], SEEK_SET);
-        int size = (int)(curPointer - (AVIChunkSizeIndex[curChunkNum] + 4));
-        PutInt(size);
-        fseek(outFile, curPointer, SEEK_SET);
+        if (!AVIChunkSizeIndex.empty())
+        {
+            long curPointer = ftell(outFile);
+            fseek(outFile, AVIChunkSizeIndex.back(), SEEK_SET);
+            int size = (int)(curPointer - (AVIChunkSizeIndex.back() + 4));
+            PutInt(size);
+            fseek(outFile, curPointer, SEEK_SET);
+            AVIChunkSizeIndex.pop_back();
+        }
     }
 
     int MjpegWriter::toJPGframe(const uchar * data, uint width, uint height, int step, void *& pBuf)
@@ -321,20 +342,19 @@ namespace jcodec{
 
         static void BGR_to_YCC(uchar *pDstY, uchar *pDstCb, uchar *pDstCr, const uchar *pSrc, int num_pixels)
         {
-            uchar *pDst = new uchar[24];
             __m128i m0 = _mm_setr_epi16(0, m00, m01, m02, m00, m01, m02, 0);
             __m128i m1 = _mm_setr_epi16(0, m10, m11, m12, m10, m11, m12, 0);
             __m128i m2 = _mm_setr_epi16(0, m20, m21, m22, m20, m21, m22, 0);
             __m128i m3 = _mm_setr_epi32(m03, m13, m23, 0);
-
+            __m128i z = _mm_setzero_si128(), t0, t1, t2, r0, r1, v0, v1, v2, v3;
             int x = 0;
 
-            for (; x <= (num_pixels - 8) * 3; x += 8 * 3)
+#if SSE
+            for (; x <= (num_pixels - 8) * 3; x += 8 * 3, pDstCr += 8, pDstCb += 8, pDstY += 8)
             {
-                __m128i z = _mm_setzero_si128(), t0, t1, t2, r0, r1;
-                __m128i v0 = _mm_loadl_epi64((const __m128i*)(pSrc + x));
-                __m128i v1 = _mm_loadl_epi64((const __m128i*)(pSrc + x + 8));
-                __m128i v2 = _mm_loadl_epi64((const __m128i*)(pSrc + x + 16)), v3;
+                v0 = _mm_loadl_epi64((const __m128i*)(pSrc + x));
+                v1 = _mm_loadl_epi64((const __m128i*)(pSrc + x + 8));
+                v2 = _mm_loadl_epi64((const __m128i*)(pSrc + x + 16)), v3;
                 v0 = _mm_unpacklo_epi8(v0, z); // b0 g0 r0 b1 g1 r1 b2 g2
                 v1 = _mm_unpacklo_epi8(v1, z); // r2 b3 g3 r3 b4 g4 r4 b5
                 v2 = _mm_unpacklo_epi8(v2, z); // g5 r5 b6 g6 r6 b7 g7 r7
@@ -352,11 +372,11 @@ namespace jcodec{
                 t0 = _mm_unpackhi_epi32(t0, t1); // a1 c1 b1 d1
                 t1 = _mm_unpacklo_epi32(t2, z);  // e0 0 f0 0
                 t2 = _mm_unpackhi_epi32(t2, z);  // e1 0 f1 0
-                r0 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(v0, t1), _mm_unpackhi_epi64(v0, t1)), m3); // B0 G0 R0 0
-                r1 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(t0, t2), _mm_unpackhi_epi64(t0, t2)), m3); // B1 G1 R1 0
+                r0 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(v0, t1), _mm_unpackhi_epi64(v0, t1)), m3); // V0 U0 Y0 0
+                r1 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(t0, t2), _mm_unpackhi_epi64(t0, t2)), m3); // V1 U1 Y1 0
                 r0 = _mm_srai_epi32(r0, BITS);
                 r1 = _mm_srai_epi32(r1, BITS);
-                v0 = _mm_packus_epi16(_mm_packs_epi32(_mm_slli_si128(r0, 4), r1), z); // 0 B0 G0 R0 B1 G1 R1 0
+                v0 = _mm_packs_epi32(r0, r1); // V0 U0 Y0 0 V1 U1 Y1 0
 
                 // process pixels 2 & 3
                 t0 = _mm_madd_epi16(v1, m0); // a0 b0 a1 b1
@@ -366,11 +386,16 @@ namespace jcodec{
                 t0 = _mm_unpackhi_epi32(t0, t1); // a1 b1 c1 d1
                 t1 = _mm_unpacklo_epi32(t2, z);  // e0 0 f0 0
                 t2 = _mm_unpackhi_epi32(t2, z);  // e1 0 f1 0
-                r0 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(v1, t1), _mm_unpackhi_epi64(v1, t1)), m3); // B2 G2 R2 0
-                r1 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(t0, t2), _mm_unpackhi_epi64(t0, t2)), m3); // B3 G3 R3 0
+                r0 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(v1, t1), _mm_unpackhi_epi64(v1, t1)), m3); // V2 U2 Y2 0
+                r1 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(t0, t2), _mm_unpackhi_epi64(t0, t2)), m3); // V3 U3 Y3 0
                 r0 = _mm_srai_epi32(r0, BITS);
                 r1 = _mm_srai_epi32(r1, BITS);
-                v1 = _mm_packus_epi16(_mm_packs_epi32(_mm_slli_si128(r0, 4), r1), z); // 0 B2 G2 R2 B3 G3 R3 0
+                v1 = _mm_packs_epi32(r0, r1); // V2 U2 Y2 0 V3 U3 Y3 0
+
+                r0 = _mm_unpacklo_epi16(v0, v1); // V0 V2 U0 U2 Y0 Y2 0 0
+                v1 = _mm_unpackhi_epi16(v0, v1); // V1 V3 U1 U3 Y1 Y3 0 0
+                v0 = _mm_unpacklo_epi16(r0, v1); // V0 V1 V2 V3 U0 U1 U2 U3
+                v1 = _mm_unpackhi_epi16(r0, v1); // Y0 Y1 Y2 Y3 0 0 0 0
 
                 //  process pixels 4 & 5
                 t0 = _mm_madd_epi16(v2, m0); // a0 b0 a1 b1
@@ -380,13 +405,13 @@ namespace jcodec{
                 t0 = _mm_unpackhi_epi32(t0, t1); // a1 b1 c1 d1
                 t1 = _mm_unpacklo_epi32(t2, z);  // e0 0 f0 0
                 t2 = _mm_unpackhi_epi32(t2, z);  // e1 0 f1 0
-                r0 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(v2, t1), _mm_unpackhi_epi64(v2, t1)), m3); // B4 G4 R4 0
-                r1 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(t0, t2), _mm_unpackhi_epi64(t0, t2)), m3); // B5 G5 R5 0
+                r0 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(v2, t1), _mm_unpackhi_epi64(v2, t1)), m3); // V4 U4 Y4 0
+                r1 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(t0, t2), _mm_unpackhi_epi64(t0, t2)), m3); // V5 U5 Y5 0
                 r0 = _mm_srai_epi32(r0, BITS);
                 r1 = _mm_srai_epi32(r1, BITS);
-                v2 = _mm_packus_epi16(_mm_packs_epi32(_mm_slli_si128(r0, 4), r1), z); // 0 B4 G4 R4 B5 G5 R5 0
+                v2 = _mm_packs_epi32(r0, r1); // V4 U4 Y4 0 V5 U5 Y5 0
 
-                // process pixels 6 & 7
+                // proce ss pixels 6 & 7
                 t0 = _mm_madd_epi16(v3, m0); // a0 b0 a1 b1
                 t1 = _mm_madd_epi16(v3, m1); // c0 d0 c1 d1
                 t2 = _mm_madd_epi16(v3, m2); // e0 f0 e1 f1
@@ -394,37 +419,34 @@ namespace jcodec{
                 t0 = _mm_unpackhi_epi32(t0, t1); // a1 b1 c1 d1
                 t1 = _mm_unpacklo_epi32(t2, z);  // e0 0 f0 0
                 t2 = _mm_unpackhi_epi32(t2, z);  // e1 0 f1 0
-                r0 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(v3, t1), _mm_unpackhi_epi64(v3, t1)), m3); // B6 G6 R6 0
-                r1 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(t0, t2), _mm_unpackhi_epi64(t0, t2)), m3); // B7 G7 R7 0
+                r0 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(v3, t1), _mm_unpackhi_epi64(v3, t1)), m3); // V6 U6 Y6 0
+                r1 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(t0, t2), _mm_unpackhi_epi64(t0, t2)), m3); // V7 U7 Y7 0
                 r0 = _mm_srai_epi32(r0, BITS);
                 r1 = _mm_srai_epi32(r1, BITS);
-                v3 = _mm_packus_epi16(_mm_packs_epi32(_mm_slli_si128(r0, 4), r1), z); // 0 B6 G6 R6 B7 G7 R7 0
+                v3= _mm_packs_epi32(r0, r1); // V6 U6 Y6 0 V7 U7 Y7 0
 
-                v0 = _mm_or_si128(_mm_srli_si128(v0, 1), _mm_slli_si128(v1, 5)); // B0 G0 R0 B1 G1 R1 B2 G2
-                v1 = _mm_or_si128(_mm_srli_si128(v1, 3), _mm_slli_si128(v2, 3)); // R2 B3 G3 R3 B4 G4 R4 B5
-                v2 = _mm_or_si128(_mm_srli_si128(v2, 5), _mm_slli_si128(v3, 1)); // G5 R5 B6 G6 R6 B7 G7 R7
+                r0 = _mm_unpacklo_epi16(v2, v3); // V4 V6 U4 U6 Y4 Y6 0 0
+                v3 = _mm_unpackhi_epi16(v2, v3); // V5 V7 U5 U7 Y5 Y7 0 0
+                v2 = _mm_unpacklo_epi16(r0, v3); // V4 V5 V6 V7 U4 U5 U6 U7
+                v3 = _mm_unpackhi_epi16(r0, v3); // Y4 Y5 Y6 Y7 0 0 0 0
 
-                _mm_storel_epi64((__m128i*)(pDst + x), v0);
-                _mm_storel_epi64((__m128i*)(pDst + x + 8), v1);
-                _mm_storel_epi64((__m128i*)(pDst + x + 16), v2);
+                t0 = _mm_unpacklo_epi64(v0, v2); // V0 ... V7
+                t1 = _mm_unpackhi_epi64(v0, v2); // U0 ... U7
+                t2 = _mm_unpacklo_epi64(v1, v3); // Y0 ... Y7
 
-                // Record YCC array into the Y, Cb, Cr arrays
-                for (int i = 0; i < 24; i += 3)
-                {
-                    pDstY = pDst--;
-                    pDstCb = pDst--;
-                    pDstCr = pDst--;
-                }
+                _mm_storel_epi64((__m128i*)pDstCr, _mm_packus_epi16(t0, t0));
+                _mm_storel_epi64((__m128i*)pDstCb, _mm_packus_epi16(t1, t1));
+                _mm_storel_epi64((__m128i*)pDstY, _mm_packus_epi16(t2, t2));
             }
+#endif
             for (; x < num_pixels * 3; x += 3)
             {
                 int v0 = pSrc[x], v1 = pSrc[x + 1], v2 = pSrc[x + 2];
                 uchar t0 = clamp((m00*v0 + m01*v1 + m02*v2 + m03) >> BITS);
                 uchar t1 = clamp((m10*v0 + m11*v1 + m12*v2 + m13) >> BITS);
                 uchar t2 = static_cast<uchar>((m20*v0 + m21*v1 + m22*v2 + m23) >> BITS);
-                pDstY[x] = t2; pDstCb[x + 1] = t1; pDstCr[x + 2] = t0;
+                *pDstY++ = t2; *pDstCb++ = t1; *pDstCr++ = t0;
             }
-            delete[] pDst;
             return;
         }
 
@@ -460,17 +482,20 @@ namespace jcodec{
     u3 += z5; u4 += z5; \
     s0 = t10 + t11; s1 = t7 + u1 + u4; s3 = t6 + u2 + u3; s4 = t10 - t11; s5 = t5 + u2 + u4; s7 = t4 + u1 + u3;
 
-        static void DCT2D(int *p)
+        void jpeg_encoder::DCT2D(int comp)
         {
-            int c, *q = p;
-            for (c = 7; c >= 0; c--, q += 8)
+            int c, shift = 128;
+            int *q = m_sample_array;
+            uchar *q_uchar = m_sample_array_uchar;
+            for (c = 7; c >= 0; c--, q += 8, q_uchar += 8)
             {
-                int s0 = q[0], s1 = q[1], s2 = q[2], s3 = q[3], s4 = q[4], s5 = q[5], s6 = q[6], s7 = q[7];
+                int s0 = (int)q_uchar[0] - shift, s1 = (int)q_uchar[1] - shift, s2 = (int)q_uchar[2] - shift, s3 = (int)q_uchar[3] - shift,
+                    s4 = (int)q_uchar[4] - shift, s5 = (int)q_uchar[5] - shift, s6 = (int)q_uchar[6] - shift, s7 = (int)q_uchar[7] - shift;
                 DCT1D(s0, s1, s2, s3, s4, s5, s6, s7);
                 q[0] = s0 << ROW_BITS; q[1] = DCT_DESCALE(s1, CONST_BITS - ROW_BITS); q[2] = DCT_DESCALE(s2, CONST_BITS - ROW_BITS); q[3] = DCT_DESCALE(s3, CONST_BITS - ROW_BITS);
                 q[4] = s4 << ROW_BITS; q[5] = DCT_DESCALE(s5, CONST_BITS - ROW_BITS); q[6] = DCT_DESCALE(s6, CONST_BITS - ROW_BITS); q[7] = DCT_DESCALE(s7, CONST_BITS - ROW_BITS);
             }
-            for (q = p, c = 7; c >= 0; c--, q++)
+            for (q = m_sample_array, q_uchar = m_sample_array_uchar, c = 7; c >= 0; c--, q++, q_uchar++)
             {
                 int s0 = q[0 * 8], s1 = q[1 * 8], s2 = q[2 * 8], s3 = q[3 * 8], s4 = q[4 * 8], s5 = q[5 * 8], s6 = q[6 * 8], s7 = q[7 * 8];
                 DCT1D(s0, s1, s2, s3, s4, s5, s6, s7);
@@ -680,39 +705,10 @@ namespace jcodec{
         bool jpeg_encoder::jpg_open(int p_x_res, int p_y_res, int src_channels)
         {
             m_num_components = 3;
-            switch (m_params.m_subsampling)
-            {
-            case Y_ONLY:
-            {
-                           m_num_components = 1;
-                           m_comp_h_samp[0] = 1; m_comp_v_samp[0] = 1;
-                           m_mcu_x = 8; m_mcu_y = 8;
-                           break;
-            }
-            case H1V1:
-            {
-                         m_comp_h_samp[0] = 1; m_comp_v_samp[0] = 1;
-                         m_comp_h_samp[1] = 1; m_comp_v_samp[1] = 1;
-                         m_comp_h_samp[2] = 1; m_comp_v_samp[2] = 1;
-                         m_mcu_x = 8; m_mcu_y = 8;
-                         break;
-            }
-            case H2V1:
-            {
-                         m_comp_h_samp[0] = 2; m_comp_v_samp[0] = 1;
-                         m_comp_h_samp[1] = 1; m_comp_v_samp[1] = 1;
-                         m_comp_h_samp[2] = 1; m_comp_v_samp[2] = 1;
-                         m_mcu_x = 16; m_mcu_y = 8;
-                         break;
-            }
-            case H2V2:
-            {
-                         m_comp_h_samp[0] = 2; m_comp_v_samp[0] = 2;
-                         m_comp_h_samp[1] = 1; m_comp_v_samp[1] = 1;
-                         m_comp_h_samp[2] = 1; m_comp_v_samp[2] = 1;
-                         m_mcu_x = 16; m_mcu_y = 16;
-            }
-            }
+            m_comp_h_samp[0] = 2; m_comp_v_samp[0] = 2;
+            m_comp_h_samp[1] = 1; m_comp_v_samp[1] = 1;
+            m_comp_h_samp[2] = 1; m_comp_v_samp[2] = 1;
+            m_mcu_x = 16; m_mcu_y = 16;
 
             m_image_x = p_x_res; m_image_y = p_y_res;
             m_image_bpp = src_channels;
@@ -754,53 +750,83 @@ namespace jcodec{
             }
             return m_all_stream_writes_succeeded;
         }
-
         void jpeg_encoder::load_block_8_8(int x, int y)
         {
-            uchar *pSrc;
-            sample_array_t *pDst = m_sample_array;
-            x *= 8;
+#if SSE
+            uchar *pDst = m_sample_array_uchar;
+            x <<= 3;
             y <<= 3;
+            __m128i str;
             for (int i = 0; i < 8; i++, pDst += 8)
             {
-                pSrc = m_mcu_linesY[y + i] + x;
-                pDst[0] = pSrc[0] - 128; pDst[1] = pSrc[1] - 128; pDst[2] = pSrc[2] - 128; pDst[3] = pSrc[3] - 128;
-                pDst[4] = pSrc[4] - 128; pDst[5] = pSrc[5] - 128; pDst[6] = pSrc[6] - 128; pDst[7] = pSrc[7] - 128;
+                str = _mm_loadl_epi64((const __m128i*)(m_mcu_linesY[y + i] + x));
+                _mm_storel_epi64((__m128i*)pDst, str);
             }
+
+
+#else
+            uchar *pDst = m_sample_array_uchar;
+            x <<= 3;
+            y <<= 3;
+            const int n_bytes = 8;
+            for (int i = 0; i < 8; i++, pDst += 8)
+                memcpy(pDst, m_mcu_linesY[y + i] + x, n_bytes);
+#endif
         }
-        //////////////////////////
         void jpeg_encoder::load_block_16_8(int x, int comp)
         {
-            uchar *pSrc1, *pSrc2;
-            sample_array_t *pDst = m_sample_array;
-            x *= 16;
+            uchar *pSrc1, *pSrc2, **pSrc;
+            x <<= 4;
             int a = 0, b = 2;
             if (comp == 1)
-            {
-                for (int i = 0; i < 16; i += 2, pDst += 8)
-                {
-                    pSrc1 = m_mcu_linesCb[i + 0] + x;
-                    pSrc2 = m_mcu_linesCb[i + 1] + x;
-                    pDst[0] = ((pSrc1[0] + pSrc1[1] + pSrc2[0] + pSrc2[1] + a) >> 2) - 128; pDst[1] = ((pSrc1[2] + pSrc1[3] + pSrc2[2] + pSrc2[3] + b) >> 2) - 128;
-                    pDst[2] = ((pSrc1[4] + pSrc1[5] + pSrc2[4] + pSrc2[5] + a) >> 2) - 128; pDst[3] = ((pSrc1[6] + pSrc1[7] + pSrc2[6] + pSrc2[7] + b) >> 2) - 128;
-                    pDst[4] = ((pSrc1[8] + pSrc1[9] + pSrc2[8] + pSrc2[9] + a) >> 2) - 128; pDst[5] = ((pSrc1[10] + pSrc1[11] + pSrc2[10] + pSrc2[11] + b) >> 2) - 128;
-                    pDst[6] = ((pSrc1[12] + pSrc1[13] + pSrc2[12] + pSrc2[13] + a) >> 2) - 128; pDst[7] = ((pSrc1[14] + pSrc1[15] + pSrc2[14] + pSrc2[15] + b) >> 2) - 128;
-                    int temp = a; a = b; b = temp;
-                }
-            }
+                pSrc = m_mcu_linesCb;
             else
+                pSrc = m_mcu_linesCr;
+#if SSE
+            uchar *pDst = m_sample_array_uchar;
+            __m128i r0, r1, a0, b0, a1, b1, res0, res1; 
+            __m128i z = _mm_setzero_si128(), mask = _mm_set1_epi16(255), delta = _mm_set1_epi16(2);
+
+            const int di = 4;
+            for (int i = 0; i < 16; i += di, pDst += di * 4)
             {
-                for (int i = 0; i < 16; i += 2, pDst += 8)
-                {
-                    pSrc1 = m_mcu_linesCr[i + 0] + x;
-                    pSrc2 = m_mcu_linesCr[i + 1] + x;
-                    pDst[0] = ((pSrc1[0] + pSrc1[1] + pSrc2[0] + pSrc2[1] + a) >> 2) - 128; pDst[1] = ((pSrc1[2] + pSrc1[3] + pSrc2[2] + pSrc2[3] + b) >> 2) - 128;
-                    pDst[2] = ((pSrc1[4] + pSrc1[5] + pSrc2[4] + pSrc2[5] + a) >> 2) - 128; pDst[3] = ((pSrc1[6] + pSrc1[7] + pSrc2[6] + pSrc2[7] + b) >> 2) - 128;
-                    pDst[4] = ((pSrc1[8] + pSrc1[9] + pSrc2[8] + pSrc2[9] + a) >> 2) - 128; pDst[5] = ((pSrc1[10] + pSrc1[11] + pSrc2[10] + pSrc2[11] + b) >> 2) - 128;
-                    pDst[6] = ((pSrc1[12] + pSrc1[13] + pSrc2[12] + pSrc2[13] + a) >> 2) - 128; pDst[7] = ((pSrc1[14] + pSrc1[15] + pSrc2[14] + pSrc2[15] + b) >> 2) - 128;
-                    int temp = a; a = b; b = temp;
-                }
+                pSrc1 = pSrc[i + 0] + x;
+                pSrc2 = pSrc[i + 1] + x;
+                r0 = _mm_loadu_si128((const __m128i*)pSrc1);
+                r1 = _mm_loadu_si128((const __m128i*)pSrc2);
+                a0 = _mm_and_si128(r0, mask); // u0 0 u2 0 u4 0 ...
+                b0 = _mm_srli_epi16(r0, 8); // u1 0 u3 0 u5 0 ...
+                a1 = _mm_and_si128(r1, mask); // u0' 0 u2' 0 u4' 0 ...
+                b1 = _mm_srli_epi16(r1, 8); // u1' 0 u3' 0 u5' 0 ...
+                res0 = _mm_add_epi16(_mm_add_epi16(a0, b0), _mm_add_epi16(a1, b1));
+                res0 = _mm_srli_epi16(_mm_add_epi16(res0, delta), 2);
+
+                pSrc1 = pSrc[i + 2] + x;
+                pSrc2 = pSrc[i + 3] + x;
+                r0 = _mm_loadu_si128((const __m128i*)pSrc1);
+                r1 = _mm_loadu_si128((const __m128i*)pSrc2);
+                a0 = _mm_and_si128(r0, mask); // u0 0 u2 0 u4 0 ...
+                b0 = _mm_srli_epi16(r0, 8); // u1 0 u3 0 u5 0 ...
+                a1 = _mm_and_si128(r1, mask); // u0' 0 u2' 0 u4' 0 ...
+                b1 = _mm_srli_epi16(r1, 8); // u1' 0 u3' 0 u5' 0 ...
+                res1 = _mm_add_epi16(_mm_add_epi16(a0, b0), _mm_add_epi16(a1, b1));
+                res1 = _mm_srli_epi16(_mm_add_epi16(res1, delta), 2);
+                
+                _mm_storeu_si128((__m128i*)pDst, _mm_packus_epi16(res0, res1));
             }
+#else
+            uchar *pDst = m_sample_array_uchar;
+            for (int i = 0; i < 16; i += 2, pDst += 8)
+            {
+                pSrc1 = pSrc[i + 0] + x;
+                pSrc2 = pSrc[i + 1] + x;
+                pDst[0] = (uchar)((pSrc1[0] + pSrc1[1] + pSrc2[0] + pSrc2[1] + a) >> 2); pDst[1] = (uchar)((pSrc1[2] + pSrc1[3] + pSrc2[2] + pSrc2[3] + b) >> 2);
+                pDst[2] = (uchar)((pSrc1[4] + pSrc1[5] + pSrc2[4] + pSrc2[5] + a) >> 2); pDst[3] = (uchar)((pSrc1[6] + pSrc1[7] + pSrc2[6] + pSrc2[7] + b) >> 2);
+                pDst[4] = (uchar)((pSrc1[8] + pSrc1[9] + pSrc2[8] + pSrc2[9] + a) >> 2); pDst[5] = (uchar)((pSrc1[10] + pSrc1[11] + pSrc2[10] + pSrc2[11] + b) >> 2);
+                pDst[6] = (uchar)((pSrc1[12] + pSrc1[13] + pSrc2[12] + pSrc2[13] + a) >> 2); pDst[7] = (uchar)((pSrc1[14] + pSrc1[15] + pSrc2[14] + pSrc2[15] + b) >> 2);
+                int temp = a; a = b; b = temp;
+            }
+#endif
         }
 
         void jpeg_encoder::load_quantized_coefficients(int component_num)
@@ -916,7 +942,7 @@ namespace jcodec{
 
         void jpeg_encoder::code_block(int component_num)
         {
-            DCT2D(m_sample_array);
+            DCT2D(component_num);
             load_quantized_coefficients(component_num);
             code_coefficients_pass_two(component_num);
         }
