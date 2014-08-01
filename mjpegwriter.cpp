@@ -499,8 +499,10 @@ namespace jcodec{
             {
                 int s0 = q[0 * 8], s1 = q[1 * 8], s2 = q[2 * 8], s3 = q[3 * 8], s4 = q[4 * 8], s5 = q[5 * 8], s6 = q[6 * 8], s7 = q[7 * 8];
                 DCT1D(s0, s1, s2, s3, s4, s5, s6, s7);
-                q[0 * 8] = DCT_DESCALE(s0, ROW_BITS + 3); q[1 * 8] = DCT_DESCALE(s1, CONST_BITS + ROW_BITS + 3); q[2 * 8] = DCT_DESCALE(s2, CONST_BITS + ROW_BITS + 3); q[3 * 8] = DCT_DESCALE(s3, CONST_BITS + ROW_BITS + 3);
-                q[4 * 8] = DCT_DESCALE(s4, ROW_BITS + 3); q[5 * 8] = DCT_DESCALE(s5, CONST_BITS + ROW_BITS + 3); q[6 * 8] = DCT_DESCALE(s6, CONST_BITS + ROW_BITS + 3); q[7 * 8] = DCT_DESCALE(s7, CONST_BITS + ROW_BITS + 3);
+                q[0 * 8] = DCT_DESCALE(s0, ROW_BITS + 3); q[1 * 8] = DCT_DESCALE(s1, CONST_BITS + ROW_BITS + 3);
+                q[2 * 8] = DCT_DESCALE(s2, CONST_BITS + ROW_BITS + 3); q[3 * 8] = DCT_DESCALE(s3, CONST_BITS + ROW_BITS + 3);
+                q[4 * 8] = DCT_DESCALE(s4, ROW_BITS + 3); q[5 * 8] = DCT_DESCALE(s5, CONST_BITS + ROW_BITS + 3); 
+                q[6 * 8] = DCT_DESCALE(s6, CONST_BITS + ROW_BITS + 3); q[7 * 8] = DCT_DESCALE(s7, CONST_BITS + ROW_BITS + 3);
             }
         }
 
@@ -795,9 +797,9 @@ namespace jcodec{
                 r0 = _mm_loadu_si128((const __m128i*)pSrc1);
                 r1 = _mm_loadu_si128((const __m128i*)pSrc2);
                 a0 = _mm_and_si128(r0, mask); // u0 0 u2 0 u4 0 ...
-                b0 = _mm_srli_epi16(r0, 8); // u1 0 u3 0 u5 0 ...
+                b0 = _mm_srli_epi16(r0, 8);   // u1 0 u3 0 u5 0 ...
                 a1 = _mm_and_si128(r1, mask); // u0' 0 u2' 0 u4' 0 ...
-                b1 = _mm_srli_epi16(r1, 8); // u1' 0 u3' 0 u5' 0 ...
+                b1 = _mm_srli_epi16(r1, 8);   // u1' 0 u3' 0 u5' 0 ...
                 res0 = _mm_add_epi16(_mm_add_epi16(a0, b0), _mm_add_epi16(a1, b1));
                 res0 = _mm_srli_epi16(_mm_add_epi16(res0, delta), 2);
 
@@ -806,9 +808,9 @@ namespace jcodec{
                 r0 = _mm_loadu_si128((const __m128i*)pSrc1);
                 r1 = _mm_loadu_si128((const __m128i*)pSrc2);
                 a0 = _mm_and_si128(r0, mask); // u0 0 u2 0 u4 0 ...
-                b0 = _mm_srli_epi16(r0, 8); // u1 0 u3 0 u5 0 ...
+                b0 = _mm_srli_epi16(r0, 8);   // u1 0 u3 0 u5 0 ...
                 a1 = _mm_and_si128(r1, mask); // u0' 0 u2' 0 u4' 0 ...
-                b1 = _mm_srli_epi16(r1, 8); // u1' 0 u3' 0 u5' 0 ...
+                b1 = _mm_srli_epi16(r1, 8);   // u1' 0 u3' 0 u5' 0 ...
                 res1 = _mm_add_epi16(_mm_add_epi16(a0, b0), _mm_add_epi16(a1, b1));
                 res1 = _mm_srli_epi16(_mm_add_epi16(res1, delta), 2);
                 
@@ -979,7 +981,6 @@ namespace jcodec{
                         memcpy(m_mcu_linesCr[i], m_mcu_linesCr[m_mcu_y_ofs - 1], m_image_x_mcu);
                     }
                 }
-
                 process_mcu_row();
             }
                 return terminate_pass_two();
