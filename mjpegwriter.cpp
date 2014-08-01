@@ -1409,6 +1409,143 @@ static void aan_fdct8x8(int *src, int *dst,
     }
 }
 
+static void SSE_aan_fdct8x8(uchar *src, int *dst, const int *postscale)
+{
+    __m128i z = _mm_setzero_si128(), x0, x1, x2, x3, x4, x5, x6, x7, 
+        x0, x1, x2, x3, x4, x5, x6, x7;
+    __m128i workspace[8], *work = workspace;; // work
+     
+    // Pass 1: process columns
+    for (i = 8; i > 0; i--, src += step, work += 8)
+    {
+        x0 = _mm_loadl_epi64((const __m128i*)(src));
+        x1 = _mm_loadl_epi64((const __m128i*)(src + 6 * 8));
+        x2 = _mm_loadl_epi64((const __m128i*)(src + 2 * 8));
+        x3 = _mm_loadl_epi64((const __m128i*)(src + 4 * 8));
+
+        // uchar -> short
+        x0 = _mm_unpacklo_epi8(x0, z);
+        x1 = _mm_unpackhi_epi8(x1, z);
+        x2 = _mm_unpackhi_epi8(x2, z);   
+        x3 = _mm_unpacklo_epi8(x3, z);
+
+        x4 = _mm_add_epi16(x0, x1);   // x4 = x0 + x1
+        x0 = _mm_sub_epi16(x0, x1);   // x0 -= x1
+
+        x1 = _mm_add_epi16(x2, x3);   // x1 = x2 + x3
+        x2 = _mm_sub_epi16(x2, x3);   // x2 -= x3
+
+        work[7] = x0; work[1] = x2;
+
+        x2 = _mm_add_epi16(x4, x1);   // x2 = x4 + x1
+        x4 = _mm_sub_epi16(x4, x1);   // x4 -= x1
+
+        x0 = _mm_loadl_epi64((const __m128i*)(src)); 
+        x3 = _mm_loadl_epi64((const __m128i*)(src + 6 * 8));
+
+        // uchar -> short
+        x0 = _mm_unpackhi_epi8(x0, z);
+        x3 = _mm_unpacklo_epi8(x3, z);
+
+        x1 = _mm_add_epi16(x0, x3);   // x1 = x0 + x3
+        x0 = _mm_sub_epi16(x0, x3);   // x0 -= x3
+
+        work[5] = x0;
+
+        x0 = _mm_loadl_epi64((const __m128i*)(src + 2 * 8));
+        x3 = _mm_loadl_epi64((const __m128i*)(src + 4 * 8));
+
+        // uchar -> short
+        x0 = _mm_unpacklo_epi8(x0, z);
+        x3 = _mm_unpackhi_epi8(x3, z);
+
+        work[3] = _mm_sub_epi16(x0, x3);
+
+        x0 = _mm_add_epi16(x0, x3);   // x0 += x3
+        x3 = _mm_add_epi16(x0, x1);   // x3 = x0 + x1
+        x0 = _mm_sub_epi16(x0, x1);   // x0 -= x1
+        x1 = _mm_add_epi16(x2, x3);   // x1 = x2 + x3
+        x2 = _mm_sub_epi16(x2, x3);   // x2 -= x3
+
+        work[0] = x1; work[4] = x2;
+
+        ////////////////////// START NOW
+
+        x0 = SSE_DCT_DESCALE((x0 - x4) * C0_707, fixb);
+        x1 = x4 + x0; x4 -= x0;
+        work[2] = x4; work[6] = x1;
+
+        x0 = work[1]; x1 = work[3];
+        x2 = work[5]; x3 = work[7];
+
+        x0 += x1; x1 += x2; x2 += x3;
+        x1 = SSE_DCT_DESCALE(x1*C0_707, fixb);
+
+        x4 = x1 + x3; x3 -= x1;
+        x1 = (x0 - x2)*C0_382;
+        x0 = SSE_DCT_DESCALE(x0 * C0_541 + x1, fixb);
+        x2 = SSE_DCT_DESCALE(x2 * C1_306 + x1, fixb);
+
+        x1 = x0 + x3; x3 -= x0;
+        x0 = x4 + x2; x4 -= x2;
+
+        work[5] = x1; work[1] = x0;
+        work[7] = x4; work[3] = x3;
+    }
+
+    work = workspace;
+    // pass 2: process rows
+    for (i = 8; i > 0; i--, work++, postscale += 8, dst += 8)
+    {
+        int  x0 = work[8 * 0], x1 = work[8 * 7];
+        int  x2 = work[8 * 3], x3 = work[8 * 4];
+
+        int  x4 = x0 + x1; x0 -= x1;
+        x1 = x2 + x3; x2 -= x3;
+
+        work[8 * 7] = x0; work[8 * 0] = x2;
+        x2 = x4 + x1; x4 -= x1;
+
+        x0 = work[8 * 1]; x3 = work[8 * 6];
+        x1 = x0 + x3; x0 -= x3;
+        work[8 * 4] = x0;
+
+        x0 = work[8 * 2]; x3 = work[8 * 5];
+        work[8 * 3] = x0 - x3; x0 += x3;
+
+        x3 = x0 + x1; x0 -= x1;
+        x1 = x2 + x3; x2 -= x3;
+
+        dst[0] = DCT_DESCALE(x1 * postscale[0], postshift);
+        dst[4] = DCT_DESCALE(x2 * postscale[4], postshift);
+
+        x0 = DCT_DESCALE((x0 - x4)*C0_707, fixb);
+        x1 = x4 + x0; x4 -= x0;
+
+        dst[2] = DCT_DESCALE(x4 * postscale[2], postshift);
+        dst[6] = DCT_DESCALE(x1 * postscale[6], postshift);
+
+        x0 = work[8 * 0]; x1 = work[8 * 3];
+        x2 = work[8 * 4]; x3 = work[8 * 7];
+
+        x0 += x1; x1 += x2; x2 += x3;
+        x1 = DCT_DESCALE(x1*C0_707, fixb);
+
+        x4 = x1 + x3; x3 -= x1;
+        x1 = (x0 - x2) * C0_382;
+        x0 = DCT_DESCALE(x0 * C0_541 + x1, fixb);
+        x2 = DCT_DESCALE(x2 * C1_306 + x1, fixb);
+
+        x1 = x0 + x3; x3 -= x0;
+        x0 = x4 + x2; x4 -= x2;
+
+        dst[5] = DCT_DESCALE(x1 * postscale[5], postshift);
+        dst[1] = DCT_DESCALE(x0 * postscale[1], postshift);
+        dst[7] = DCT_DESCALE(x4 * postscale[7], postshift);
+        dst[3] = DCT_DESCALE(x3 * postscale[3], postshift);
+    }
+}
+
 #if 0
 bool  WriteImage(const uchar* data, int step,
     int width, int height, int /*depth*/, int _channels)
