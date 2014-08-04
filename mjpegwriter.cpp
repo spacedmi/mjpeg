@@ -1069,7 +1069,6 @@ namespace jcodec
 
         // Higher level wrappers/examples (optional).
 #include <stdio.h>
-
         class memory_stream : public output_stream
         {
             memory_stream(const memory_stream &);
@@ -1114,7 +1113,7 @@ namespace jcodec
 
             buf_size = 0;
 #if HIGHGUI
-            WriteImage(&dst_stream, pImage_data, 8, width, height, num_channels);
+            WriteImage(pImage_data, width*3, width, height, num_channels);
 #else
             if (!init(&dst_stream, width, height, num_channels, comp_params))
                 return false;
@@ -1415,8 +1414,6 @@ namespace jcodec
         __m128i workspace[8], *work = workspace;; // work
      
         // Pass 1: process columns
-        for (i = 8; i > 0; i--, src += step, work += 8)
-        {
             x0 = _mm_loadl_epi64((const __m128i*)(src));
             x1 = _mm_loadl_epi64((const __m128i*)(src + 6 * 8));
             x2 = _mm_loadl_epi64((const __m128i*)(src + 2 * 8));
@@ -1467,8 +1464,6 @@ namespace jcodec
             x2 = _mm_sub_epi16(x2, x3);   // x2 -= x3
 
             work[0] = x1; work[4] = x2;
-
-            ////////////////////// START NOW
 
             x0 = SSE_DCT_DESCALE((x0 - x4) * C0_707, fixb);
             x1 = x4 + x0; x4 -= x0;
@@ -1559,7 +1554,7 @@ namespace jcodec
 
             for (code_count += k; k < code_count; k++)
             {
-                int  val = src[k] > huff_val_shift;
+                int val = src[k] >> huff_val_shift;
                 if (val < min_val)
                     min_val = val;
                 if (val > max_val)
@@ -1618,12 +1613,12 @@ namespace jcodec
         return  table;
     }
 
-    bool jpeg_encoder::WriteImage(output_stream *pStream, const uchar* data, int step,
+    bool jpeg_encoder::WriteImage(const uchar* data, int step,
         int width, int height, int _channels)
     {
+        WJpegBitStream m_strm;
         assert(data && width > 0 && height > 0);
-        WJpegBitStream  m_strm;
-        if (!m_strm.Open(pStream)) return false;
+        if (!m_strm.Open(m_pStream)) return false;
 
         // encode the header and tables
         // for each mcu:
@@ -1893,102 +1888,6 @@ namespace jcodec
         return (((const int*)"\0\x1\x2\x3\x4\x5\x6\x7")[0] & 255) != 0;
     }
 
-    bool bsCreateDecodeHuffmanTable(const int* src, short* table, int max_size)
-    {
-        const int forbidden_entry = (RBS_HUFF_FORB << 4) | 1;
-        int       first_bits = src[0];
-        struct
-        {
-            int bits;
-            int offset;
-        }
-        sub_tables[1 << 11];
-        int  size = (1 << first_bits) + 1;
-        int  i, k;
-
-        /* calc bit depths of sub tables */
-        memset(sub_tables, 0, ((size_t)1 << first_bits)*sizeof(sub_tables[0]));
-        for (i = 1, k = 1; src[k] >= 0; i++)
-        {
-            int code_count = src[k++];
-            int sb = i - first_bits;
-
-            if (sb <= 0)
-                k += code_count;
-            else
-            for (code_count += k; k < code_count; k++)
-            {
-                int  code = src[k] & huff_code_mask;
-                sub_tables[code >> sb].bits = sb;
-            }
-        }
-
-        /* calc offsets of sub tables and whole size of table */
-        for (i = 0; i < (1 << first_bits); i++)
-        {
-            int b = sub_tables[i].bits;
-            if (b > 0)
-            {
-                b = 1 << b;
-                sub_tables[i].offset = size;
-                size += b + 1;
-            }
-        }
-
-        if (size > max_size)
-        {
-            assert(0);
-            return false;
-        }
-
-        /* fill first table and subtables with forbidden values */
-        for (i = 0; i < size; i++)
-        {
-            table[i] = (short)forbidden_entry;
-        }
-
-        /* write header of first table */
-        table[0] = (short)first_bits;
-
-        /* fill first table and sub tables */
-        for (i = 1, k = 1; src[k] >= 0; i++)
-        {
-            int code_count = src[k++];
-            for (code_count += k; k < code_count; k++)
-            {
-                int  table_bits = first_bits;
-                int  code_bits = i;
-                int  code = src[k] & huff_code_mask;
-                int  val = src[k] >> huff_val_shift;
-                int  j, offset = 0;
-
-                if (code_bits > table_bits)
-                {
-                    int idx = code >> (code_bits -= table_bits);
-                    code &= (1 << code_bits) - 1;
-                    offset = sub_tables[idx].offset;
-                    table_bits = sub_tables[idx].bits;
-                    /* write header of subtable */
-                    table[offset] = (short)table_bits;
-                    /* write jump to subtable */
-                    table[idx + 1] = (short)(offset << 4);
-                }
-
-                table_bits -= code_bits;
-                assert(table_bits >= 0);
-                val = (val << 4) | code_bits;
-                offset += (code << table_bits) + 1;
-
-                for (j = 0; j < (1 << table_bits); j++)
-                {
-                    assert(table[offset + j] == forbidden_entry);
-                    table[offset + j] = (short)val;
-                }
-            }
-        }
-        return true;
-    }
-
 
     /////////////////////////// WBaseStream /////////////////////////////////
 
@@ -2028,24 +1927,20 @@ namespace jcodec
     void  WBaseStream::WriteBlock()
     {
         int size = (int)(m_current - m_start);
-
-        //fseek( m_file, m_block_pos, SEEK_SET );
+        assert(m_stream != 0);
         m_stream->put_buf(m_start, size);
-
         m_current = m_start;
-
         m_block_pos += size;
     }
 
 
-    bool  WBaseStream::Open(output_stream *stream)
+    bool  WBaseStream::Open()
     {
         Close();
         Allocate();
 
-        if (stream)
+        if (m_stream)
         {
-            m_stream = stream;
             m_is_opened = true;
             m_block_pos = 0;
             m_current = m_start;
@@ -2056,14 +1951,8 @@ namespace jcodec
 
     void  WBaseStream::Close()
     {
-        if (m_stream)
-        {
-            WriteBlock();
-            m_stream = 0;
-        }
         m_is_opened = false;
     }
-
 
     void  WBaseStream::Release()
     {
@@ -2073,18 +1962,6 @@ namespace jcodec
         }
         m_start = m_end = m_current = 0;
     }
-
-
-    void  WBaseStream::SetBlockSize(int block_size)
-    {
-        assert(block_size > 0 && (block_size & (block_size - 1)) == 0);
-
-        if (m_start && block_size == m_block_size) return;
-        Release();
-        m_block_size = block_size;
-        Allocate();
-    }
-
 
     int  WBaseStream::GetPos()
     {
@@ -2203,31 +2080,6 @@ namespace jcodec
         }
     }
 
-
-    void WMByteStream::PutDWord(int val)
-    {
-        uchar *current = m_current;
-
-        if (current + 3 < m_end)
-        {
-            current[0] = (uchar)(val >> 24);
-            current[1] = (uchar)(val >> 16);
-            current[2] = (uchar)(val >> 8);
-            current[3] = (uchar)val;
-            m_current = current + 4;
-            if (m_current == m_end)
-                WriteBlock();
-        }
-        else
-        {
-            PutByte(val >> 24);
-            PutByte(val >> 16);
-            PutByte(val >> 8);
-            PutByte(val);
-        }
-    }
-
-
     ///////////////////////////// WMBitStream /////////////////////////////////// 
 
     WMBitStream::WMBitStream()
@@ -2242,10 +2094,10 @@ namespace jcodec
     }
 
 
-    bool  WMBitStream::Open(output_stream *stream)
+   bool  WMBitStream::Open()
     {
         ResetBuffer();
-        return WBaseStream::Open(stream);
+        return true;
     }
 
 
@@ -2324,7 +2176,7 @@ namespace jcodec
         int min_val = (int)table[0];
         val -= min_val;
 
-        //assert((unsigned)val < table[1]);
+        assert((unsigned)val < table[1]);
 
         ulong code = table[val + 2];
         assert(code != 0);
@@ -2351,13 +2203,10 @@ namespace jcodec
     {
         Close();
         Allocate();
-
-        m_is_opened = m_low_strm.Open(stream);
-        if (m_is_opened)
-        {
-            m_block_pos = 0;
-            ResetBuffer();
-        }
+        m_stream = stream;
+        m_is_opened = true;
+        m_block_pos = 0;
+        ResetBuffer();
         return m_is_opened;
     }
 
