@@ -3,10 +3,11 @@
 #include "opencv2/core/utility.hpp"
 #include <smmintrin.h>
 
-namespace jcodec{
+namespace jcodec
+{
 
 #define SSE 1
-
+#define HIGHGUI 1
 #define fourCC(a,b,c,d) ( (int) ((uchar(d)<<24) | (uchar(c)<<16) | (uchar(b)<<8) | uchar(a)) )
 #define DIM(arr) (sizeof(arr)/sizeof(arr[0]))
 
@@ -74,11 +75,6 @@ namespace jcodec{
         if(!WriteFrame(Im))
             return -2;
         return 1;
-    }
-
-    bool MjpegWriter::isOpened()
-    {
-        return isOpen;
     }
 
     void MjpegWriter::StartWriteAVI()
@@ -272,13 +268,14 @@ namespace jcodec{
         const int req_comps = 3; // request BGR image, if (BGRA) req_comps = 4; 
         params param;
         param.m_quality = quality;
-        param.m_subsampling = H2V2;
+        param.m_subsampling = (subsampling_t)H2V2;
         int buf_size = width * height * 3; // allocate a buffer that's hopefully big enough (this is way overkill for jpeg)
         if (buf_size < 1024) buf_size = 1024;
         pBuf = malloc(buf_size);
         jpeg_encoder dst_image;
         if (!dst_image.compress_image_to_jpeg_file_in_memory(pBuf, buf_size, width, height, req_comps, data, param))
             return -1;
+
         return buf_size;
     }
 
@@ -1116,7 +1113,9 @@ namespace jcodec{
             memory_stream dst_stream(pDstBuf, buf_size);
 
             buf_size = 0;
-
+#if HIGHGUI
+            WriteImage(&dst_stream, pImage_data, 8, width, height, num_channels);
+#else
             if (!init(&dst_stream, width, height, num_channels, comp_params))
                 return false;
 
@@ -1132,661 +1131,1273 @@ namespace jcodec{
                     return false;
             }
             deinit();
-
+#endif
             buf_size = dst_stream.get_size();
             return true;
         }
-}
 
-/////////////////////// GrFmtJpegWriter ///////////////////
+    /////////////////////// GrFmtJpegWriter ///////////////////
 
-//  Standard JPEG quantization tables
-static const uchar jpegTableK1_T[] =
-{
-    16, 12, 14, 14, 18, 24, 49, 72,
-    11, 12, 13, 17, 22, 35, 64, 92,
-    10, 14, 16, 22, 37, 55, 78, 95,
-    16, 19, 24, 29, 56, 64, 87, 98,
-    24, 26, 40, 51, 68, 81, 103, 112,
-    40, 58, 57, 87, 109, 104, 121, 100,
-    51, 60, 69, 80, 103, 113, 120, 103,
-    61, 55, 56, 62, 77, 92, 101, 99
-};
-
-
-static const uchar jpegTableK2_T[] =
-{
-    17, 18, 24, 47, 99, 99, 99, 99,
-    18, 21, 26, 66, 99, 99, 99, 99,
-    24, 26, 56, 99, 99, 99, 99, 99,
-    47, 66, 99, 99, 99, 99, 99, 99,
-    99, 99, 99, 99, 99, 99, 99, 99,
-    99, 99, 99, 99, 99, 99, 99, 99,
-    99, 99, 99, 99, 99, 99, 99, 99,
-    99, 99, 99, 99, 99, 99, 99, 99
-};
-
-// Standard Huffman tables
-
-// ... for luma DCs.
-static const uchar jpegTableK3[] =
-{
-    0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0,
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
-};
-
-// ... for chroma DCs.
-static const uchar jpegTableK4[] =
-{
-    0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0,
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
-};
-
-// ... for luma ACs.
-static const uchar jpegTableK5[] =
-{
-    0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 125,
-    0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12,
-    0x21, 0x31, 0x41, 0x06, 0x13, 0x51, 0x61, 0x07,
-    0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xa1, 0x08,
-    0x23, 0x42, 0xb1, 0xc1, 0x15, 0x52, 0xd1, 0xf0,
-    0x24, 0x33, 0x62, 0x72, 0x82, 0x09, 0x0a, 0x16,
-    0x17, 0x18, 0x19, 0x1a, 0x25, 0x26, 0x27, 0x28,
-    0x29, 0x2a, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39,
-    0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49,
-    0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59,
-    0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69,
-    0x6a, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79,
-    0x7a, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89,
-    0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98,
-    0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
-    0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6,
-    0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5,
-    0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4,
-    0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xe1, 0xe2,
-    0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea,
-    0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8,
-    0xf9, 0xfa
-};
-
-// ... for chroma ACs  
-static const uchar jpegTableK6[] =
-{
-    0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 119,
-    0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21,
-    0x31, 0x06, 0x12, 0x41, 0x51, 0x07, 0x61, 0x71,
-    0x13, 0x22, 0x32, 0x81, 0x08, 0x14, 0x42, 0x91,
-    0xa1, 0xb1, 0xc1, 0x09, 0x23, 0x33, 0x52, 0xf0,
-    0x15, 0x62, 0x72, 0xd1, 0x0a, 0x16, 0x24, 0x34,
-    0xe1, 0x25, 0xf1, 0x17, 0x18, 0x19, 0x1a, 0x26,
-    0x27, 0x28, 0x29, 0x2a, 0x35, 0x36, 0x37, 0x38,
-    0x39, 0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48,
-    0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58,
-    0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68,
-    0x69, 0x6a, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78,
-    0x79, 0x7a, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
-    0x88, 0x89, 0x8a, 0x92, 0x93, 0x94, 0x95, 0x96,
-    0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5,
-    0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4,
-    0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3,
-    0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2,
-    0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda,
-    0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9,
-    0xea, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8,
-    0xf9, 0xfa
-};
-
-#define fixb         14
-#define fix(x, n)    (int)((x)*(1 << (n)) + .5)
-#define fix1(x, n)   (x)
-#define fixmul(x)    (x)
-
-#define C0_707     fix( 0.707106781f, fixb )
-#define C0_924     fix( 0.923879533f, fixb )
-#define C0_541     fix( 0.541196100f, fixb )
-#define C0_382     fix( 0.382683432f, fixb )
-#define C1_306     fix( 1.306562965f, fixb )
-
-#define C1_082     fix( 1.082392200f, fixb )
-#define C1_414     fix( 1.414213562f, fixb )
-#define C1_847     fix( 1.847759065f, fixb )
-#define C2_613     fix( 2.613125930f, fixb )
-
-#define fixc       12
-#define b_cb       fix( 1.772, fixc )
-#define g_cb      -fix( 0.34414, fixc )
-#define g_cr      -fix( 0.71414, fixc )
-#define r_cr       fix( 1.402, fixc )
-
-#define y_r        fix( 0.299, fixc )
-#define y_g        fix( 0.587, fixc )
-#define y_b        fix( 0.114, fixc )
-
-#define cb_r      -fix( 0.1687, fixc )
-#define cb_g      -fix( 0.3313, fixc )
-#define cb_b       fix( 0.5,    fixc )
-
-#define cr_r       fix( 0.5,    fixc )
-#define cr_g      -fix( 0.4187, fixc )
-#define cr_b      -fix( 0.0813, fixc )
-
-static const uchar zigzag[] =
-{
-    0, 8, 1, 2, 9, 16, 24, 17, 10, 3, 4, 11, 18, 25, 32, 40,
-    33, 26, 19, 12, 5, 6, 13, 20, 27, 34, 41, 48, 56, 49, 42, 35,
-    28, 21, 14, 7, 15, 22, 29, 36, 43, 50, 57, 58, 51, 44, 37, 30,
-    23, 31, 38, 45, 52, 59, 60, 53, 46, 39, 47, 54, 61, 62, 55, 63,
-    63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63
-};
-
-static const int idct_prescale[] =
-{
-    16384, 22725, 21407, 19266, 16384, 12873, 8867, 4520,
-    22725, 31521, 29692, 26722, 22725, 17855, 12299, 6270,
-    21407, 29692, 27969, 25172, 21407, 16819, 11585, 5906,
-    19266, 26722, 25172, 22654, 19266, 15137, 10426, 5315,
-    16384, 22725, 21407, 19266, 16384, 12873, 8867, 4520,
-    12873, 17855, 16819, 15137, 12873, 10114, 6967, 3552,
-    8867, 12299, 11585, 10426, 8867, 6967, 4799, 2446,
-    4520, 6270, 5906, 5315, 4520, 3552, 2446, 1247
-};
-
-static const char jpegHeader[] =
-"\xFF\xD8"  // SOI  - start of image
-"\xFF\xE0"  // APP0 - jfif extention
-"\x00\x10"  // 2 bytes: length of APP0 segment
-"JFIF\x00"  // JFIF signature
-"\x01\x02"  // version of JFIF
-"\x00"      // units = pixels ( 1 - inch, 2 - cm )
-"\x00\x01\x00\x01" // 2 2-bytes values: x density & y density
-"\x00\x00"; // width & height of thumbnail: ( 0x0 means no thumbnail)
-
-#define postshift 14
-
-// FDCT with postscaling
-static void aan_fdct8x8(int *src, int *dst,
-    int step, const int *postscale)
-{
-    int  workspace[64], *work = workspace;
-    int  i;
-
-    // Pass 1: process rows
-    for (i = 8; i > 0; i--, src += step, work += 8)
+    //  Standard JPEG quantization tables
+    static const uchar jpegTableK1_T[] =
     {
-        int x0 = src[0], x1 = src[7];
-        int x2 = src[3], x3 = src[4];
+        16, 12, 14, 14, 18, 24, 49, 72,
+        11, 12, 13, 17, 22, 35, 64, 92,
+        10, 14, 16, 22, 37, 55, 78, 95,
+        16, 19, 24, 29, 56, 64, 87, 98,
+        24, 26, 40, 51, 68, 81, 103, 112,
+        40, 58, 57, 87, 109, 104, 121, 100,
+        51, 60, 69, 80, 103, 113, 120, 103,
+        61, 55, 56, 62, 77, 92, 101, 99
+    };
 
-        int x4 = x0 + x1; x0 -= x1;
-        x1 = x2 + x3; x2 -= x3;
 
-        work[7] = x0; work[1] = x2;
-        x2 = x4 + x1; x4 -= x1;
-
-        x0 = src[1]; x3 = src[6];
-        x1 = x0 + x3; x0 -= x3;
-        work[5] = x0;
-
-        x0 = src[2]; x3 = src[5];
-        work[3] = x0 - x3; x0 += x3;
-
-        x3 = x0 + x1; x0 -= x1;
-        x1 = x2 + x3; x2 -= x3;
-
-        work[0] = x1; work[4] = x2;
-
-        x0 = DCT_DESCALE((x0 - x4) * C0_707, fixb);
-        x1 = x4 + x0; x4 -= x0;
-        work[2] = x4; work[6] = x1;
-
-        x0 = work[1]; x1 = work[3];
-        x2 = work[5]; x3 = work[7];
-
-        x0 += x1; x1 += x2; x2 += x3;
-        x1 = DCT_DESCALE(x1*C0_707, fixb);
-
-        x4 = x1 + x3; x3 -= x1;
-        x1 = (x0 - x2)*C0_382;
-        x0 = DCT_DESCALE(x0 * C0_541 + x1, fixb);
-        x2 = DCT_DESCALE(x2 * C1_306 + x1, fixb);
-
-        x1 = x0 + x3; x3 -= x0;
-        x0 = x4 + x2; x4 -= x2;
-
-        work[5] = x1; work[1] = x0;
-        work[7] = x4; work[3] = x3;
-    }
-
-    work = workspace;
-    // pass 2: process columns
-    for (i = 8; i > 0; i--, work++, postscale += 8, dst += 8)
+    static const uchar jpegTableK2_T[] =
     {
-        int  x0 = work[8 * 0], x1 = work[8 * 7];
-        int  x2 = work[8 * 3], x3 = work[8 * 4];
+        17, 18, 24, 47, 99, 99, 99, 99,
+        18, 21, 26, 66, 99, 99, 99, 99,
+        24, 26, 56, 99, 99, 99, 99, 99,
+        47, 66, 99, 99, 99, 99, 99, 99,
+        99, 99, 99, 99, 99, 99, 99, 99,
+        99, 99, 99, 99, 99, 99, 99, 99,
+        99, 99, 99, 99, 99, 99, 99, 99,
+        99, 99, 99, 99, 99, 99, 99, 99
+    };
 
-        int  x4 = x0 + x1; x0 -= x1;
-        x1 = x2 + x3; x2 -= x3;
+    // Standard Huffman tables
 
-        work[8 * 7] = x0; work[8 * 0] = x2;
-        x2 = x4 + x1; x4 -= x1;
+    // ... for luma DCs.
+    static const uchar jpegTableK3[] =
+    {
+        0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0,
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
+    };
 
-        x0 = work[8 * 1]; x3 = work[8 * 6];
-        x1 = x0 + x3; x0 -= x3;
-        work[8 * 4] = x0;
+    // ... for chroma DCs.
+    static const uchar jpegTableK4[] =
+    {
+        0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0,
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
+    };
 
-        x0 = work[8 * 2]; x3 = work[8 * 5];
-        work[8 * 3] = x0 - x3; x0 += x3;
+    // ... for luma ACs.
+    static const uchar jpegTableK5[] =
+    {
+        0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 125,
+        0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12,
+        0x21, 0x31, 0x41, 0x06, 0x13, 0x51, 0x61, 0x07,
+        0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xa1, 0x08,
+        0x23, 0x42, 0xb1, 0xc1, 0x15, 0x52, 0xd1, 0xf0,
+        0x24, 0x33, 0x62, 0x72, 0x82, 0x09, 0x0a, 0x16,
+        0x17, 0x18, 0x19, 0x1a, 0x25, 0x26, 0x27, 0x28,
+        0x29, 0x2a, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39,
+        0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49,
+        0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59,
+        0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69,
+        0x6a, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79,
+        0x7a, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89,
+        0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98,
+        0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
+        0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6,
+        0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5,
+        0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4,
+        0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xe1, 0xe2,
+        0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea,
+        0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8,
+        0xf9, 0xfa
+    };
 
-        x3 = x0 + x1; x0 -= x1;
-        x1 = x2 + x3; x2 -= x3;
+    // ... for chroma ACs  
+    static const uchar jpegTableK6[] =
+    {
+        0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 119,
+        0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21,
+        0x31, 0x06, 0x12, 0x41, 0x51, 0x07, 0x61, 0x71,
+        0x13, 0x22, 0x32, 0x81, 0x08, 0x14, 0x42, 0x91,
+        0xa1, 0xb1, 0xc1, 0x09, 0x23, 0x33, 0x52, 0xf0,
+        0x15, 0x62, 0x72, 0xd1, 0x0a, 0x16, 0x24, 0x34,
+        0xe1, 0x25, 0xf1, 0x17, 0x18, 0x19, 0x1a, 0x26,
+        0x27, 0x28, 0x29, 0x2a, 0x35, 0x36, 0x37, 0x38,
+        0x39, 0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48,
+        0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58,
+        0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68,
+        0x69, 0x6a, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78,
+        0x79, 0x7a, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
+        0x88, 0x89, 0x8a, 0x92, 0x93, 0x94, 0x95, 0x96,
+        0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5,
+        0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4,
+        0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3,
+        0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2,
+        0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda,
+        0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9,
+        0xea, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8,
+        0xf9, 0xfa
+    };
 
-        dst[0] = DCT_DESCALE(x1 * postscale[0], postshift);
-        dst[4] = DCT_DESCALE(x2 * postscale[4], postshift);
+    #define fixb         14
+    #define fix(x, n)    (int)((x)*(1 << (n)) + .5)
+    #define fix1(x, n)   (x)
+    #define fixmul(x)    (x)
 
-        x0 = DCT_DESCALE((x0 - x4)*C0_707, fixb);
-        x1 = x4 + x0; x4 -= x0;
+    #define C0_707     fix( 0.707106781f, fixb )
+    #define C0_924     fix( 0.923879533f, fixb )
+    #define C0_541     fix( 0.541196100f, fixb )
+    #define C0_382     fix( 0.382683432f, fixb )
+    #define C1_306     fix( 1.306562965f, fixb )
 
-        dst[2] = DCT_DESCALE(x4 * postscale[2], postshift);
-        dst[6] = DCT_DESCALE(x1 * postscale[6], postshift);
+    #define C1_082     fix( 1.082392200f, fixb )
+    #define C1_414     fix( 1.414213562f, fixb )
+    #define C1_847     fix( 1.847759065f, fixb )
+    #define C2_613     fix( 2.613125930f, fixb )
 
-        x0 = work[8 * 0]; x1 = work[8 * 3];
-        x2 = work[8 * 4]; x3 = work[8 * 7];
+    #define fixc       12
+    #define b_cb       fix( 1.772, fixc )
+    #define g_cb      -fix( 0.34414, fixc )
+    #define g_cr      -fix( 0.71414, fixc )
+    #define r_cr       fix( 1.402, fixc )
 
-        x0 += x1; x1 += x2; x2 += x3;
-        x1 = DCT_DESCALE(x1*C0_707, fixb);
+    #define y_r        fix( 0.299, fixc )
+    #define y_g        fix( 0.587, fixc )
+    #define y_b        fix( 0.114, fixc )
 
-        x4 = x1 + x3; x3 -= x1;
-        x1 = (x0 - x2) * C0_382;
-        x0 = DCT_DESCALE(x0 * C0_541 + x1, fixb);
-        x2 = DCT_DESCALE(x2 * C1_306 + x1, fixb);
+    #define cb_r      -fix( 0.1687, fixc )
+    #define cb_g      -fix( 0.3313, fixc )
+    #define cb_b       fix( 0.5,    fixc )
 
-        x1 = x0 + x3; x3 -= x0;
-        x0 = x4 + x2; x4 -= x2;
+    #define cr_r       fix( 0.5,    fixc )
+    #define cr_g      -fix( 0.4187, fixc )
+    #define cr_b      -fix( 0.0813, fixc )
 
-        dst[5] = DCT_DESCALE(x1 * postscale[5], postshift);
-        dst[1] = DCT_DESCALE(x0 * postscale[1], postshift);
-        dst[7] = DCT_DESCALE(x4 * postscale[7], postshift);
-        dst[3] = DCT_DESCALE(x3 * postscale[3], postshift);
+    static const uchar zigzag[] =
+    {
+        0, 8, 1, 2, 9, 16, 24, 17, 10, 3, 4, 11, 18, 25, 32, 40,
+        33, 26, 19, 12, 5, 6, 13, 20, 27, 34, 41, 48, 56, 49, 42, 35,
+        28, 21, 14, 7, 15, 22, 29, 36, 43, 50, 57, 58, 51, 44, 37, 30,
+        23, 31, 38, 45, 52, 59, 60, 53, 46, 39, 47, 54, 61, 62, 55, 63,
+        63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63
+    };
+
+    static const int idct_prescale[] =
+    {
+        16384, 22725, 21407, 19266, 16384, 12873, 8867, 4520,
+        22725, 31521, 29692, 26722, 22725, 17855, 12299, 6270,
+        21407, 29692, 27969, 25172, 21407, 16819, 11585, 5906,
+        19266, 26722, 25172, 22654, 19266, 15137, 10426, 5315,
+        16384, 22725, 21407, 19266, 16384, 12873, 8867, 4520,
+        12873, 17855, 16819, 15137, 12873, 10114, 6967, 3552,
+        8867, 12299, 11585, 10426, 8867, 6967, 4799, 2446,
+        4520, 6270, 5906, 5315, 4520, 3552, 2446, 1247
+    };
+
+    static const char jpegHeader[] =
+    "\xFF\xD8"  // SOI  - start of image
+    "\xFF\xE0"  // APP0 - jfif extention
+    "\x00\x10"  // 2 bytes: length of APP0 segment
+    "JFIF\x00"  // JFIF signature
+    "\x01\x02"  // version of JFIF
+    "\x00"      // units = pixels ( 1 - inch, 2 - cm )
+    "\x00\x01\x00\x01" // 2 2-bytes values: x density & y density
+    "\x00\x00"; // width & height of thumbnail: ( 0x0 means no thumbnail)
+
+    static const int huff_val_shift = 20, huff_code_mask = (1 << huff_val_shift) - 1;
+
+    #define postshift 14
+
+    // FDCT with postscaling
+    static void aan_fdct8x8(int *src, int *dst,
+        int step, const int *postscale)
+    {
+        int  workspace[64], *work = workspace;
+        int  i;
+
+        // Pass 1: process rows
+        for (i = 8; i > 0; i--, src += step, work += 8)
+        {
+            int x0 = src[0], x1 = src[7];
+            int x2 = src[3], x3 = src[4];
+
+            int x4 = x0 + x1; x0 -= x1;
+            x1 = x2 + x3; x2 -= x3;
+
+            work[7] = x0; work[1] = x2;
+            x2 = x4 + x1; x4 -= x1;
+
+            x0 = src[1]; x3 = src[6];
+            x1 = x0 + x3; x0 -= x3;
+            work[5] = x0;
+
+            x0 = src[2]; x3 = src[5];
+            work[3] = x0 - x3; x0 += x3;
+
+            x3 = x0 + x1; x0 -= x1;
+            x1 = x2 + x3; x2 -= x3;
+
+            work[0] = x1; work[4] = x2;
+
+            x0 = DCT_DESCALE((x0 - x4) * C0_707, fixb);
+            x1 = x4 + x0; x4 -= x0;
+            work[2] = x4; work[6] = x1;
+
+            x0 = work[1]; x1 = work[3];
+            x2 = work[5]; x3 = work[7];
+
+            x0 += x1; x1 += x2; x2 += x3;
+            x1 = DCT_DESCALE(x1*C0_707, fixb);
+
+            x4 = x1 + x3; x3 -= x1;
+            x1 = (x0 - x2)*C0_382;
+            x0 = DCT_DESCALE(x0 * C0_541 + x1, fixb);
+            x2 = DCT_DESCALE(x2 * C1_306 + x1, fixb);
+
+            x1 = x0 + x3; x3 -= x0;
+            x0 = x4 + x2; x4 -= x2;
+
+            work[5] = x1; work[1] = x0;
+            work[7] = x4; work[3] = x3;
+        }
+
+        work = workspace;
+        // pass 2: process columns
+        for (i = 8; i > 0; i--, work++, postscale += 8, dst += 8)
+        {
+            int  x0 = work[8 * 0], x1 = work[8 * 7];
+            int  x2 = work[8 * 3], x3 = work[8 * 4];
+
+            int  x4 = x0 + x1; x0 -= x1;
+            x1 = x2 + x3; x2 -= x3;
+
+            work[8 * 7] = x0; work[8 * 0] = x2;
+            x2 = x4 + x1; x4 -= x1;
+
+            x0 = work[8 * 1]; x3 = work[8 * 6];
+            x1 = x0 + x3; x0 -= x3;
+            work[8 * 4] = x0;
+
+            x0 = work[8 * 2]; x3 = work[8 * 5];
+            work[8 * 3] = x0 - x3; x0 += x3;
+
+            x3 = x0 + x1; x0 -= x1;
+            x1 = x2 + x3; x2 -= x3;
+
+            dst[0] = DCT_DESCALE(x1 * postscale[0], postshift);
+            dst[4] = DCT_DESCALE(x2 * postscale[4], postshift);
+
+            x0 = DCT_DESCALE((x0 - x4)*C0_707, fixb);
+            x1 = x4 + x0; x4 -= x0;
+
+            dst[2] = DCT_DESCALE(x4 * postscale[2], postshift);
+            dst[6] = DCT_DESCALE(x1 * postscale[6], postshift);
+
+            x0 = work[8 * 0]; x1 = work[8 * 3];
+            x2 = work[8 * 4]; x3 = work[8 * 7];
+
+            x0 += x1; x1 += x2; x2 += x3;
+            x1 = DCT_DESCALE(x1*C0_707, fixb);
+
+            x4 = x1 + x3; x3 -= x1;
+            x1 = (x0 - x2) * C0_382;
+            x0 = DCT_DESCALE(x0 * C0_541 + x1, fixb);
+            x2 = DCT_DESCALE(x2 * C1_306 + x1, fixb);
+
+            x1 = x0 + x3; x3 -= x0;
+            x0 = x4 + x2; x4 -= x2;
+
+            dst[5] = DCT_DESCALE(x1 * postscale[5], postshift);
+            dst[1] = DCT_DESCALE(x0 * postscale[1], postshift);
+            dst[7] = DCT_DESCALE(x4 * postscale[7], postshift);
+            dst[3] = DCT_DESCALE(x3 * postscale[3], postshift);
+        }
     }
-}
-
-static void SSE_aan_fdct8x8(uchar *src, int *dst, const int *postscale)
-{
-    __m128i z = _mm_setzero_si128(), x0, x1, x2, x3, x4, x5, x6, x7, 
-        x0, x1, x2, x3, x4, x5, x6, x7;
-    __m128i workspace[8], *work = workspace;; // work
+    #if 0
+    static void SSE_aan_fdct8x8(uchar *src, int *dst, const int *postscale)
+    {
+        __m128i z = _mm_setzero_si128(), x0, x1, x2, x3, x4, x5, x6, x7;
+        __m128i workspace[8], *work = workspace;; // work
      
-    // Pass 1: process columns
-    for (i = 8; i > 0; i--, src += step, work += 8)
-    {
-        x0 = _mm_loadl_epi64((const __m128i*)(src));
-        x1 = _mm_loadl_epi64((const __m128i*)(src + 6 * 8));
-        x2 = _mm_loadl_epi64((const __m128i*)(src + 2 * 8));
-        x3 = _mm_loadl_epi64((const __m128i*)(src + 4 * 8));
-
-        // uchar -> short
-        x0 = _mm_unpacklo_epi8(x0, z);
-        x1 = _mm_unpackhi_epi8(x1, z);
-        x2 = _mm_unpackhi_epi8(x2, z);   
-        x3 = _mm_unpacklo_epi8(x3, z);
-
-        x4 = _mm_add_epi16(x0, x1);   // x4 = x0 + x1
-        x0 = _mm_sub_epi16(x0, x1);   // x0 -= x1
-
-        x1 = _mm_add_epi16(x2, x3);   // x1 = x2 + x3
-        x2 = _mm_sub_epi16(x2, x3);   // x2 -= x3
-
-        work[7] = x0; work[1] = x2;
-
-        x2 = _mm_add_epi16(x4, x1);   // x2 = x4 + x1
-        x4 = _mm_sub_epi16(x4, x1);   // x4 -= x1
-
-        x0 = _mm_loadl_epi64((const __m128i*)(src)); 
-        x3 = _mm_loadl_epi64((const __m128i*)(src + 6 * 8));
-
-        // uchar -> short
-        x0 = _mm_unpackhi_epi8(x0, z);
-        x3 = _mm_unpacklo_epi8(x3, z);
-
-        x1 = _mm_add_epi16(x0, x3);   // x1 = x0 + x3
-        x0 = _mm_sub_epi16(x0, x3);   // x0 -= x3
-
-        work[5] = x0;
-
-        x0 = _mm_loadl_epi64((const __m128i*)(src + 2 * 8));
-        x3 = _mm_loadl_epi64((const __m128i*)(src + 4 * 8));
-
-        // uchar -> short
-        x0 = _mm_unpacklo_epi8(x0, z);
-        x3 = _mm_unpackhi_epi8(x3, z);
-
-        work[3] = _mm_sub_epi16(x0, x3);
-
-        x0 = _mm_add_epi16(x0, x3);   // x0 += x3
-        x3 = _mm_add_epi16(x0, x1);   // x3 = x0 + x1
-        x0 = _mm_sub_epi16(x0, x1);   // x0 -= x1
-        x1 = _mm_add_epi16(x2, x3);   // x1 = x2 + x3
-        x2 = _mm_sub_epi16(x2, x3);   // x2 -= x3
-
-        work[0] = x1; work[4] = x2;
-
-        ////////////////////// START NOW
-
-        x0 = SSE_DCT_DESCALE((x0 - x4) * C0_707, fixb);
-        x1 = x4 + x0; x4 -= x0;
-        work[2] = x4; work[6] = x1;
-
-        x0 = work[1]; x1 = work[3];
-        x2 = work[5]; x3 = work[7];
-
-        x0 += x1; x1 += x2; x2 += x3;
-        x1 = SSE_DCT_DESCALE(x1*C0_707, fixb);
-
-        x4 = x1 + x3; x3 -= x1;
-        x1 = (x0 - x2)*C0_382;
-        x0 = SSE_DCT_DESCALE(x0 * C0_541 + x1, fixb);
-        x2 = SSE_DCT_DESCALE(x2 * C1_306 + x1, fixb);
-
-        x1 = x0 + x3; x3 -= x0;
-        x0 = x4 + x2; x4 -= x2;
-
-        work[5] = x1; work[1] = x0;
-        work[7] = x4; work[3] = x3;
-    }
-
-    work = workspace;
-    // pass 2: process rows
-    for (i = 8; i > 0; i--, work++, postscale += 8, dst += 8)
-    {
-        int  x0 = work[8 * 0], x1 = work[8 * 7];
-        int  x2 = work[8 * 3], x3 = work[8 * 4];
-
-        int  x4 = x0 + x1; x0 -= x1;
-        x1 = x2 + x3; x2 -= x3;
-
-        work[8 * 7] = x0; work[8 * 0] = x2;
-        x2 = x4 + x1; x4 -= x1;
-
-        x0 = work[8 * 1]; x3 = work[8 * 6];
-        x1 = x0 + x3; x0 -= x3;
-        work[8 * 4] = x0;
-
-        x0 = work[8 * 2]; x3 = work[8 * 5];
-        work[8 * 3] = x0 - x3; x0 += x3;
-
-        x3 = x0 + x1; x0 -= x1;
-        x1 = x2 + x3; x2 -= x3;
-
-        dst[0] = DCT_DESCALE(x1 * postscale[0], postshift);
-        dst[4] = DCT_DESCALE(x2 * postscale[4], postshift);
-
-        x0 = DCT_DESCALE((x0 - x4)*C0_707, fixb);
-        x1 = x4 + x0; x4 -= x0;
-
-        dst[2] = DCT_DESCALE(x4 * postscale[2], postshift);
-        dst[6] = DCT_DESCALE(x1 * postscale[6], postshift);
-
-        x0 = work[8 * 0]; x1 = work[8 * 3];
-        x2 = work[8 * 4]; x3 = work[8 * 7];
-
-        x0 += x1; x1 += x2; x2 += x3;
-        x1 = DCT_DESCALE(x1*C0_707, fixb);
-
-        x4 = x1 + x3; x3 -= x1;
-        x1 = (x0 - x2) * C0_382;
-        x0 = DCT_DESCALE(x0 * C0_541 + x1, fixb);
-        x2 = DCT_DESCALE(x2 * C1_306 + x1, fixb);
-
-        x1 = x0 + x3; x3 -= x0;
-        x0 = x4 + x2; x4 -= x2;
-
-        dst[5] = DCT_DESCALE(x1 * postscale[5], postshift);
-        dst[1] = DCT_DESCALE(x0 * postscale[1], postshift);
-        dst[7] = DCT_DESCALE(x4 * postscale[7], postshift);
-        dst[3] = DCT_DESCALE(x3 * postscale[3], postshift);
-    }
-}
-
-#if 0
-bool  WriteImage(const uchar* data, int step,
-    int width, int height, int /*depth*/, int _channels)
-{
-    assert(data && width > 0 && height > 0);
-
-    if (!m_strm.Open(m_filename)) return false;
-
-    // encode the header and tables
-    // for each mcu:
-    //   convert rgb to yuv with downsampling (if color).
-    //   for every block:
-    //     calc dct and quantize
-    //     encode block.
-    int x, y;
-    int i, j;
-    const int max_quality = 12;
-    int   quality = max_quality;
-    WMByteStream& lowstrm = m_strm.m_low_strm;
-    int   fdct_qtab[2][64];
-    unsigned long huff_dc_tab[2][16];
-    unsigned long huff_ac_tab[2][256];
-    int  channels = _channels > 1 ? 3 : 1;
-    int  x_scale = channels > 1 ? 2 : 1, y_scale = x_scale;
-    int  dc_pred[] = { 0, 0, 0 };
-    int  x_step = x_scale * 8;
-    int  y_step = y_scale * 8;
-    int  block[6][64];
-    int  buffer[1024];
-    int  luma_count = x_scale*y_scale;
-    int  block_count = luma_count + channels - 1;
-    int  Y_step = x_scale * 8;
-    const int UV_step = 16;
-    double inv_quality;
-
-    if (quality < 3) quality = 3;
-    if (quality > max_quality) quality = max_quality;
-
-    inv_quality = 1. / quality;
-
-    // Encode header
-    lowstrm.PutBytes(jpegHeader, sizeof(jpegHeader)-1);
-
-    // Encode quantization tables
-    for (i = 0; i < (channels > 1 ? 2 : 1); i++)
-    {
-        const uchar* qtable = i == 0 ? jpegTableK1_T : jpegTableK2_T;
-        int chroma_scale = i > 0 ? luma_count : 1;
-
-        lowstrm.PutWord(0xffdb);   // DQT marker
-        lowstrm.PutWord(2 + 65 * 1); // put single qtable
-        lowstrm.PutByte(0 * 16 + i); // 8-bit table
-
-        // put coefficients
-        for (j = 0; j < 64; j++)
+        // Pass 1: process columns
+        for (i = 8; i > 0; i--, src += step, work += 8)
         {
-            int idx = zigzag[j];
-            int qval = cvRound(qtable[idx] * inv_quality);
-            if (qval < 1)
-                qval = 1;
-            if (qval > 255)
-                qval = 255;
-            fdct_qtab[i][idx] = cvRound((1 << (postshift + 9)) /
-                (qval*chroma_scale*idct_prescale[idx]));
-            lowstrm.PutByte(qval);
+            x0 = _mm_loadl_epi64((const __m128i*)(src));
+            x1 = _mm_loadl_epi64((const __m128i*)(src + 6 * 8));
+            x2 = _mm_loadl_epi64((const __m128i*)(src + 2 * 8));
+            x3 = _mm_loadl_epi64((const __m128i*)(src + 4 * 8));
+
+            // uchar -> short
+            x0 = _mm_unpacklo_epi8(x0, z);
+            x1 = _mm_unpackhi_epi8(x1, z);
+            x2 = _mm_unpackhi_epi8(x2, z);   
+            x3 = _mm_unpacklo_epi8(x3, z);
+
+            x4 = _mm_add_epi16(x0, x1);   // x4 = x0 + x1
+            x0 = _mm_sub_epi16(x0, x1);   // x0 -= x1
+
+            x1 = _mm_add_epi16(x2, x3);   // x1 = x2 + x3
+            x2 = _mm_sub_epi16(x2, x3);   // x2 -= x3
+
+            work[7] = x0; work[1] = x2;
+
+            x2 = _mm_add_epi16(x4, x1);   // x2 = x4 + x1
+            x4 = _mm_sub_epi16(x4, x1);   // x4 -= x1
+
+            x0 = _mm_loadl_epi64((const __m128i*)(src)); 
+            x3 = _mm_loadl_epi64((const __m128i*)(src + 6 * 8));
+
+            // uchar -> short
+            x0 = _mm_unpackhi_epi8(x0, z);
+            x3 = _mm_unpacklo_epi8(x3, z);
+
+            x1 = _mm_add_epi16(x0, x3);   // x1 = x0 + x3
+            x0 = _mm_sub_epi16(x0, x3);   // x0 -= x3
+
+            work[5] = x0;
+
+            x0 = _mm_loadl_epi64((const __m128i*)(src + 2 * 8));
+            x3 = _mm_loadl_epi64((const __m128i*)(src + 4 * 8));
+
+            // uchar -> short
+            x0 = _mm_unpacklo_epi8(x0, z);
+            x3 = _mm_unpackhi_epi8(x3, z);
+
+            work[3] = _mm_sub_epi16(x0, x3);
+
+            x0 = _mm_add_epi16(x0, x3);   // x0 += x3
+            x3 = _mm_add_epi16(x0, x1);   // x3 = x0 + x1
+            x0 = _mm_sub_epi16(x0, x1);   // x0 -= x1
+            x1 = _mm_add_epi16(x2, x3);   // x1 = x2 + x3
+            x2 = _mm_sub_epi16(x2, x3);   // x2 -= x3
+
+            work[0] = x1; work[4] = x2;
+
+            ////////////////////// START NOW
+
+            x0 = SSE_DCT_DESCALE((x0 - x4) * C0_707, fixb);
+            x1 = x4 + x0; x4 -= x0;
+            work[2] = x4; work[6] = x1;
+
+            x0 = work[1]; x1 = work[3];
+            x2 = work[5]; x3 = work[7];
+
+            x0 += x1; x1 += x2; x2 += x3;
+            x1 = SSE_DCT_DESCALE(x1*C0_707, fixb);
+
+            x4 = x1 + x3; x3 -= x1;
+            x1 = (x0 - x2)*C0_382;
+            x0 = SSE_DCT_DESCALE(x0 * C0_541 + x1, fixb);
+            x2 = SSE_DCT_DESCALE(x2 * C1_306 + x1, fixb);
+
+            x1 = x0 + x3; x3 -= x0;
+            x0 = x4 + x2; x4 -= x2;
+
+            work[5] = x1; work[1] = x0;
+            work[7] = x4; work[3] = x3;
+        }
+
+        work = workspace;
+        // pass 2: process rows
+        for (i = 8; i > 0; i--, work++, postscale += 8, dst += 8)
+        {
+            int  x0 = work[8 * 0], x1 = work[8 * 7];
+            int  x2 = work[8 * 3], x3 = work[8 * 4];
+
+            int  x4 = x0 + x1; x0 -= x1;
+            x1 = x2 + x3; x2 -= x3;
+
+            work[8 * 7] = x0; work[8 * 0] = x2;
+            x2 = x4 + x1; x4 -= x1;
+
+            x0 = work[8 * 1]; x3 = work[8 * 6];
+            x1 = x0 + x3; x0 -= x3;
+            work[8 * 4] = x0;
+
+            x0 = work[8 * 2]; x3 = work[8 * 5];
+            work[8 * 3] = x0 - x3; x0 += x3;
+
+            x3 = x0 + x1; x0 -= x1;
+            x1 = x2 + x3; x2 -= x3;
+
+            dst[0] = DCT_DESCALE(x1 * postscale[0], postshift);
+            dst[4] = DCT_DESCALE(x2 * postscale[4], postshift);
+
+            x0 = DCT_DESCALE((x0 - x4)*C0_707, fixb);
+            x1 = x4 + x0; x4 -= x0;
+
+            dst[2] = DCT_DESCALE(x4 * postscale[2], postshift);
+            dst[6] = DCT_DESCALE(x1 * postscale[6], postshift);
+
+            x0 = work[8 * 0]; x1 = work[8 * 3];
+            x2 = work[8 * 4]; x3 = work[8 * 7];
+
+            x0 += x1; x1 += x2; x2 += x3;
+            x1 = DCT_DESCALE(x1*C0_707, fixb);
+
+            x4 = x1 + x3; x3 -= x1;
+            x1 = (x0 - x2) * C0_382;
+            x0 = DCT_DESCALE(x0 * C0_541 + x1, fixb);
+            x2 = DCT_DESCALE(x2 * C1_306 + x1, fixb);
+
+            x1 = x0 + x3; x3 -= x0;
+            x0 = x4 + x2; x4 -= x2;
+
+            dst[5] = DCT_DESCALE(x1 * postscale[5], postshift);
+            dst[1] = DCT_DESCALE(x0 * postscale[1], postshift);
+            dst[7] = DCT_DESCALE(x4 * postscale[7], postshift);
+            dst[3] = DCT_DESCALE(x3 * postscale[3], postshift);
         }
     }
+    #endif
 
-    // Encode huffman tables
-    for (i = 0; i < (channels > 1 ? 4 : 2); i++)
+    bool bsCreateEncodeHuffmanTable(const int* src, unsigned long* table, int max_size)
     {
-        const uchar* htable = i == 0 ? jpegTableK3 : i == 1 ? jpegTableK5 :
-            i == 2 ? jpegTableK4 : jpegTableK6;
-        int is_ac_tab = i & 1;
-        int idx = i >= 2;
-        int tableSize = 16 + (is_ac_tab ? 162 : 12);
+        int  i, k;
+        int  min_val = INT_MAX, max_val = INT_MIN;
+        int  size;
 
-        lowstrm.PutWord(0xFFC4);      // DHT marker
-        lowstrm.PutWord(3 + tableSize); // define one huffman table
-        lowstrm.PutByte(is_ac_tab * 16 + idx); // put DC/AC flag and table index
-        lowstrm.PutBytes(htable, tableSize); // put table
-
-        bsCreateEncodeHuffmanTable(bsCreateSourceHuffmanTable(
-            htable, buffer, 16, 9), is_ac_tab ? huff_ac_tab[idx] :
-            huff_dc_tab[idx], is_ac_tab ? 256 : 16);
-    }
-
-    // put frame header
-    lowstrm.PutWord(0xFFC0);          // SOF0 marker
-    lowstrm.PutWord(8 + 3 * channels);  // length of frame header
-    lowstrm.PutByte(8);               // sample precision
-    lowstrm.PutWord(height);
-    lowstrm.PutWord(width);
-    lowstrm.PutByte(channels);        // number of components
-
-    for (i = 0; i < channels; i++)
-    {
-        lowstrm.PutByte(i + 1);  // (i+1)-th component id (Y,U or V)
-        if (i == 0)
-            lowstrm.PutByte(x_scale * 16 + y_scale); // chroma scale factors
-        else
-            lowstrm.PutByte(1 * 16 + 1);
-        lowstrm.PutByte(i > 0); // quantization table idx
-    }
-
-    // put scan header
-    lowstrm.PutWord(0xFFDA);          // SOS marker
-    lowstrm.PutWord(6 + 2 * channels);  // length of scan header
-    lowstrm.PutByte(channels);        // number of components in the scan
-
-    for (i = 0; i < channels; i++)
-    {
-        lowstrm.PutByte(i + 1);             // component id
-        lowstrm.PutByte((i>0) * 16 + (i>0));// selection of DC & AC tables
-    }
-
-    lowstrm.PutWord(0 * 256 + 63);// start and end of spectral selection - for
-    // sequental DCT start is 0 and end is 63
-
-    lowstrm.PutByte(0);  // successive approximation bit position 
-    // high & low - (0,0) for sequental DCT  
-
-    // encode data
-    for (y = 0; y < height; y += y_step, data += y_step*step)
-    {
-        for (x = 0; x < width; x += x_step)
+        /* calc min and max values in the table */
+        for (i = 1, k = 1; src[k] >= 0; i++)
         {
-            int x_limit = x_step;
-            int y_limit = y_step;
-            const uchar* rgb_data = data + x*_channels;
-            int* Y_data = block[0];
+            int code_count = src[k++];
 
-            if (x + x_limit > width) x_limit = width - x;
-            if (y + y_limit > height) y_limit = height - y;
-
-            memset(block, 0, block_count * 64 * sizeof(block[0][0]));
-
-            if (channels > 1)
+            for (code_count += k; k < code_count; k++)
             {
-                int* UV_data = block[luma_count];
-
-                for (i = 0; i < y_limit; i++, rgb_data += step, Y_data += Y_step)
-                {
-                    for (j = 0; j < x_limit; j++, rgb_data += _channels)
-                    {
-                        int r = rgb_data[2];
-                        int g = rgb_data[1];
-                        int b = rgb_data[0];
-
-                        int Y = DCT_DESCALE(r*y_r + g*y_g + b*y_b, fixc - 2) - 128 * 4;
-                        int U = DCT_DESCALE(r*cb_r + g*cb_g + b*cb_b, fixc - 2);
-                        int V = DCT_DESCALE(r*cr_r + g*cr_g + b*cr_b, fixc - 2);
-                        int j2 = j >> (x_scale - 1);
-
-                        Y_data[j] = Y;
-                        UV_data[j2] += U;
-                        UV_data[j2 + 8] += V;
-                    }
-
-                    rgb_data -= x_limit*_channels;
-                    if (((i + 1) & (y_scale - 1)) == 0)
-                    {
-                        UV_data += UV_step;
-                    }
-                }
+                int  val = src[k] > huff_val_shift;
+                if (val < min_val)
+                    min_val = val;
+                if (val > max_val)
+                    max_val = val;
             }
+        }
+
+        size = max_val - min_val + 3;
+
+        if (size > max_size)
+        {
+            assert(0);
+            return false;
+        }
+
+        memset(table, 0, size*sizeof(table[0]));
+
+        table[0] = min_val;
+        table[1] = size - 2;
+
+        for (i = 1, k = 1; src[k] >= 0; i++)
+        {
+            int code_count = src[k++];
+
+            for (code_count += k; k < code_count; k++)
+            {
+                int  val = src[k] >> huff_val_shift;
+                int  code = src[k] & huff_code_mask;
+
+                table[val - min_val + 2] = (code << 8) | i;
+            }
+        }
+        return true;
+    }
+
+    int*  bsCreateSourceHuffmanTable(const uchar* src, int* dst,
+        int max_bits, int first_bits)
+    {
+        int   i, val_idx, code = 0;
+        int*  table = dst;
+        *dst++ = first_bits;
+        for (i = 1, val_idx = max_bits; i <= max_bits; i++)
+        {
+            int code_count = src[i - 1];
+            dst[0] = code_count;
+            code <<= 1;
+            for (int k = 0; k < code_count; k++)
+            {
+                dst[k + 1] = (src[val_idx + k] << huff_val_shift) | (code + k);
+            }
+            code += code_count;
+            dst += code_count + 1;
+            val_idx += code_count;
+        }
+        dst[0] = -1;
+        return  table;
+    }
+
+    bool jpeg_encoder::WriteImage(output_stream *pStream, const uchar* data, int step,
+        int width, int height, int _channels)
+    {
+        assert(data && width > 0 && height > 0);
+        WJpegBitStream  m_strm;
+        if (!m_strm.Open(pStream)) return false;
+
+        // encode the header and tables
+        // for each mcu:
+        //   convert rgb to yuv with downsampling (if color).
+        //   for every block:
+        //     calc dct and quantize
+        //     encode block.
+        int x, y;
+        int i, j;
+        const int max_quality = 12;
+        int   quality = max_quality;
+        WMByteStream& lowstrm = m_strm.m_low_strm;
+        int   fdct_qtab[2][64];
+        ulong huff_dc_tab[2][16];
+        ulong huff_ac_tab[2][256];
+        int  channels = _channels > 1 ? 3 : 1;
+        int  x_scale = channels > 1 ? 2 : 1, y_scale = x_scale;
+        int  dc_pred[] = { 0, 0, 0 };
+        int  x_step = x_scale * 8;
+        int  y_step = y_scale * 8;
+        int  block[6][64];
+        int  buffer[1024];
+        int  luma_count = x_scale*y_scale;
+        int  block_count = luma_count + channels - 1;
+        int  Y_step = x_scale * 8;
+        const int UV_step = 16;
+        double inv_quality;
+
+        if (quality < 3) quality = 3;
+        if (quality > max_quality) quality = max_quality;
+
+        inv_quality = 1. / quality;
+
+        // Encode header
+        lowstrm.PutBytes(jpegHeader, sizeof(jpegHeader)-1);
+
+        // Encode quantization tables
+        for (i = 0; i < (channels > 1 ? 2 : 1); i++)
+        {
+            const uchar* qtable = i == 0 ? jpegTableK1_T : jpegTableK2_T;
+            int chroma_scale = i > 0 ? luma_count : 1;
+
+            lowstrm.PutWord(0xffdb);   // DQT marker
+            lowstrm.PutWord(2 + 65 * 1); // put single qtable
+            lowstrm.PutByte(0 * 16 + i); // 8-bit table
+
+            // put coefficients
+            for (j = 0; j < 64; j++)
+            {
+                int idx = zigzag[j];
+                int qval = cvRound(qtable[idx] * inv_quality);
+                if (qval < 1)
+                    qval = 1;
+                if (qval > 255)
+                    qval = 255;
+                fdct_qtab[i][idx] = cvRound((1 << (postshift + 9)) /
+                    (qval*chroma_scale*idct_prescale[idx]));
+                lowstrm.PutByte(qval);
+            }
+        }
+
+        // Encode huffman tables
+        for (i = 0; i < (channels > 1 ? 4 : 2); i++)
+        {
+            const uchar* htable = i == 0 ? jpegTableK3 : i == 1 ? jpegTableK5 :
+                i == 2 ? jpegTableK4 : jpegTableK6;
+            int is_ac_tab = i & 1;
+            int idx = i >= 2;
+            int tableSize = 16 + (is_ac_tab ? 162 : 12);
+
+            lowstrm.PutWord(0xFFC4);      // DHT marker
+            lowstrm.PutWord(3 + tableSize); // define one huffman table
+            lowstrm.PutByte(is_ac_tab * 16 + idx); // put DC/AC flag and table index
+            lowstrm.PutBytes(htable, tableSize); // put table
+
+            bsCreateEncodeHuffmanTable(bsCreateSourceHuffmanTable(
+                htable, buffer, 16, 9), is_ac_tab ? huff_ac_tab[idx] :
+                huff_dc_tab[idx], is_ac_tab ? 256 : 16);
+        }
+
+        // put frame header
+        lowstrm.PutWord(0xFFC0);          // SOF0 marker
+        lowstrm.PutWord(8 + 3 * channels);  // length of frame header
+        lowstrm.PutByte(8);               // sample precision
+        lowstrm.PutWord(height);
+        lowstrm.PutWord(width);
+        lowstrm.PutByte(channels);        // number of components
+
+        for (i = 0; i < channels; i++)
+        {
+            lowstrm.PutByte(i + 1);  // (i+1)-th component id (Y,U or V)
+            if (i == 0)
+                lowstrm.PutByte(x_scale * 16 + y_scale); // chroma scale factors
             else
+                lowstrm.PutByte(1 * 16 + 1);
+            lowstrm.PutByte(i > 0); // quantization table idx
+        }
+
+        // put scan header
+        lowstrm.PutWord(0xFFDA);          // SOS marker
+        lowstrm.PutWord(6 + 2 * channels);  // length of scan header
+        lowstrm.PutByte(channels);        // number of components in the scan
+
+        for (i = 0; i < channels; i++)
+        {
+            lowstrm.PutByte(i + 1);             // component id
+            lowstrm.PutByte((i>0) * 16 + (i > 0));// selection of DC & AC tables
+        }
+
+        lowstrm.PutWord(0 * 256 + 63);// start and end of spectral selection - for
+        // sequental DCT start is 0 and end is 63
+
+        lowstrm.PutByte(0);  // successive approximation bit position 
+        // high & low - (0,0) for sequental DCT  
+
+        // encode data
+        for (y = 0; y < height; y += y_step, data += y_step*step)
+        {
+            for (x = 0; x < width; x += x_step)
             {
-                for (i = 0; i < y_limit; i++, rgb_data += step, Y_data += Y_step)
+                int x_limit = x_step;
+                int y_limit = y_step;
+                const uchar* rgb_data = data + x*_channels;
+                int* Y_data = block[0];
+
+                if (x + x_limit > width) x_limit = width - x;
+                if (y + y_limit > height) y_limit = height - y;
+
+                memset(block, 0, block_count * 64 * sizeof(block[0][0]));
+
+                if (channels > 1)
                 {
-                    for (j = 0; j < x_limit; j++)
-                        Y_data[j] = rgb_data[j] * 4 - 128 * 4;
-                }
-            }
+                    int* UV_data = block[luma_count];
 
-            for (i = 0; i < block_count; i++)
-            {
-                int is_chroma = i >= luma_count;
-                int src_step = x_scale * 8;
-                int run = 0, val;
-                int* src_ptr = block[i & -2] + (i & 1) * 8;
-                const unsigned long* htable = huff_ac_tab[is_chroma];
-
-                aan_fdct8x8(src_ptr, buffer, src_step, fdct_qtab[is_chroma]);
-
-                j = is_chroma + (i > luma_count);
-                val = buffer[0] - dc_pred[j];
-                dc_pred[j] = buffer[0];
-
-                {
-                    float a = (float)val;
-                    int cat = (((int&)a >> 23) & 255) - (126 & (val ? -1 : 0));
-
-                    assert(cat <= 11);
-                    m_strm.PutHuff(cat, huff_dc_tab[is_chroma]);
-                    m_strm.Put(val - (val < 0 ? 1 : 0), cat);
-                }
-
-                for (j = 1; j < 64; j++)
-                {
-                    val = buffer[zigzag[j]];
-
-                    if (val == 0)
+                    for (i = 0; i < y_limit; i++, rgb_data += step, Y_data += Y_step)
                     {
-                        run++;
-                    }
-                    else
-                    {
-                        while (run >= 16)
+                        for (j = 0; j < x_limit; j++, rgb_data += _channels)
                         {
-                            m_strm.PutHuff(0xF0, htable); // encode 16 zeros
-                            run -= 16;
+                            int r = rgb_data[2];
+                            int g = rgb_data[1];
+                            int b = rgb_data[0];
+
+                            int Y = DCT_DESCALE(r*y_r + g*y_g + b*y_b, fixc - 2) - 128 * 4;
+                            int U = DCT_DESCALE(r*cb_r + g*cb_g + b*cb_b, fixc - 2);
+                            int V = DCT_DESCALE(r*cr_r + g*cr_g + b*cr_b, fixc - 2);
+                            int j2 = j >> (x_scale - 1);
+
+                            Y_data[j] = Y;
+                            UV_data[j2] += U;
+                            UV_data[j2 + 8] += V;
                         }
 
+                        rgb_data -= x_limit*_channels;
+                        if (((i + 1) & (y_scale - 1)) == 0)
                         {
-                            float a = (float)val;
-                            int cat = (((int&)a >> 23) & 255) - (126 & (val ? -1 : 0));
-
-                            assert(cat <= 10);
-                            m_strm.PutHuff(cat + run * 16, htable);
-                            m_strm.Put(val - (val < 0 ? 1 : 0), cat);
+                            UV_data += UV_step;
                         }
-
-                        run = 0;
+                    }
+                }
+                else
+                {
+                    for (i = 0; i < y_limit; i++, rgb_data += step, Y_data += Y_step)
+                    {
+                        for (j = 0; j < x_limit; j++)
+                            Y_data[j] = rgb_data[j] * 4 - 128 * 4;
                     }
                 }
 
-                if (run)
+                for (i = 0; i < block_count; i++)
                 {
-                    m_strm.PutHuff(0x00, htable); // encode EOB
+                    int is_chroma = i >= luma_count;
+                    int src_step = x_scale * 8;
+                    int run = 0, val;
+                    int* src_ptr = block[i & -2] + (i & 1) * 8;
+                    const ulong* htable = huff_ac_tab[is_chroma];
+
+                    aan_fdct8x8(src_ptr, buffer, src_step, fdct_qtab[is_chroma]);
+
+                    j = is_chroma + (i > luma_count);
+                    val = buffer[0] - dc_pred[j];
+                    dc_pred[j] = buffer[0];
+
+                    {
+                        float a = (float)val;
+                        int cat = (((int&)a >> 23) & 255) - (126 & (val ? -1 : 0));
+
+                        assert(cat <= 11);
+                        m_strm.PutHuff(cat, huff_dc_tab[is_chroma]);
+                        m_strm.Put(val - (val < 0 ? 1 : 0), cat);
+                    }
+
+                    for (j = 1; j < 64; j++)
+                    {
+                        val = buffer[zigzag[j]];
+
+                        if (val == 0)
+                        {
+                            run++;
+                        }
+                        else
+                        {
+                            while (run >= 16)
+                            {
+                                m_strm.PutHuff(0xF0, htable); // encode 16 zeros
+                                run -= 16;
+                            }
+
+                            {
+                                float a = (float)val;
+                                int cat = (((int&)a >> 23) & 255) - (126 & (val ? -1 : 0));
+
+                                assert(cat <= 10);
+                                m_strm.PutHuff(cat + run * 16, htable);
+                                m_strm.Put(val - (val < 0 ? 1 : 0), cat);
+                            }
+
+                            run = 0;
+                        }
+                    }
+
+                    if (run)
+                    {
+                        m_strm.PutHuff(0x00, htable); // encode EOB
+                    }
                 }
             }
         }
+
+        // Flush 
+        m_strm.Flush();
+
+        lowstrm.PutWord(0xFFD9); // EOI marker
+        m_strm.Close();
+
+        return true;
     }
 
-    // Flush 
-    m_strm.Flush();
+#define  BS_DEF_BLOCK_SIZE   (1<<15)
 
-    lowstrm.PutWord(0xFFD9); // EOI marker
-    m_strm.Close();
+    const ulong bs_bit_mask[] = {
+        0,
+        0x00000001, 0x00000003, 0x00000007, 0x0000000F,
+        0x0000001F, 0x0000003F, 0x0000007F, 0x000000FF,
+        0x000001FF, 0x000003FF, 0x000007FF, 0x00000FFF,
+        0x00001FFF, 0x00003FFF, 0x00007FFF, 0x0000FFFF,
+        0x0001FFFF, 0x0003FFFF, 0x0007FFFF, 0x000FFFFF,
+        0x001FFFFF, 0x003FFFFF, 0x007FFFFF, 0x00FFFFFF,
+        0x01FFFFFF, 0x03FFFFFF, 0x07FFFFFF, 0x0FFFFFFF,
+        0x1FFFFFFF, 0x3FFFFFFF, 0x7FFFFFFF, 0xFFFFFFFF
+    };
 
-    return true;
+    void bsBSwapBlock(uchar *start, uchar *end)
+    {
+        ulong* data = (ulong*)start;
+        int i, size = (int)(end - start + 3) / 4;
+
+        for (i = 0; i < size; i++)
+        {
+            ulong temp = data[i];
+            temp = BSWAP(temp);
+            data[i] = temp;
+        }
+    }
+
+    bool  bsIsBigEndian(void)
+    {
+        return (((const int*)"\0\x1\x2\x3\x4\x5\x6\x7")[0] & 255) != 0;
+    }
+
+    bool bsCreateDecodeHuffmanTable(const int* src, short* table, int max_size)
+    {
+        const int forbidden_entry = (RBS_HUFF_FORB << 4) | 1;
+        int       first_bits = src[0];
+        struct
+        {
+            int bits;
+            int offset;
+        }
+        sub_tables[1 << 11];
+        int  size = (1 << first_bits) + 1;
+        int  i, k;
+
+        /* calc bit depths of sub tables */
+        memset(sub_tables, 0, ((size_t)1 << first_bits)*sizeof(sub_tables[0]));
+        for (i = 1, k = 1; src[k] >= 0; i++)
+        {
+            int code_count = src[k++];
+            int sb = i - first_bits;
+
+            if (sb <= 0)
+                k += code_count;
+            else
+            for (code_count += k; k < code_count; k++)
+            {
+                int  code = src[k] & huff_code_mask;
+                sub_tables[code >> sb].bits = sb;
+            }
+        }
+
+        /* calc offsets of sub tables and whole size of table */
+        for (i = 0; i < (1 << first_bits); i++)
+        {
+            int b = sub_tables[i].bits;
+            if (b > 0)
+            {
+                b = 1 << b;
+                sub_tables[i].offset = size;
+                size += b + 1;
+            }
+        }
+
+        if (size > max_size)
+        {
+            assert(0);
+            return false;
+        }
+
+        /* fill first table and subtables with forbidden values */
+        for (i = 0; i < size; i++)
+        {
+            table[i] = (short)forbidden_entry;
+        }
+
+        /* write header of first table */
+        table[0] = (short)first_bits;
+
+        /* fill first table and sub tables */
+        for (i = 1, k = 1; src[k] >= 0; i++)
+        {
+            int code_count = src[k++];
+            for (code_count += k; k < code_count; k++)
+            {
+                int  table_bits = first_bits;
+                int  code_bits = i;
+                int  code = src[k] & huff_code_mask;
+                int  val = src[k] >> huff_val_shift;
+                int  j, offset = 0;
+
+                if (code_bits > table_bits)
+                {
+                    int idx = code >> (code_bits -= table_bits);
+                    code &= (1 << code_bits) - 1;
+                    offset = sub_tables[idx].offset;
+                    table_bits = sub_tables[idx].bits;
+                    /* write header of subtable */
+                    table[offset] = (short)table_bits;
+                    /* write jump to subtable */
+                    table[idx + 1] = (short)(offset << 4);
+                }
+
+                table_bits -= code_bits;
+                assert(table_bits >= 0);
+                val = (val << 4) | code_bits;
+                offset += (code << table_bits) + 1;
+
+                for (j = 0; j < (1 << table_bits); j++)
+                {
+                    assert(table[offset + j] == forbidden_entry);
+                    table[offset + j] = (short)val;
+                }
+            }
+        }
+        return true;
+    }
+
+
+    /////////////////////////// WBaseStream /////////////////////////////////
+
+    // WBaseStream - base class for output streams
+    WBaseStream::WBaseStream()
+    {
+        m_start = m_end = m_current = 0;
+        m_stream = 0;
+        m_block_size = BS_DEF_BLOCK_SIZE;
+        m_is_opened = false;
+    }
+
+
+    WBaseStream::~WBaseStream()
+    {
+        Close();    // Close files
+        Release();  // free  buffers
+    }
+
+
+    bool  WBaseStream::IsOpened()
+    {
+        return m_is_opened;
+    }
+
+
+    void  WBaseStream::Allocate()
+    {
+        if (!m_start)
+            m_start = new uchar[m_block_size];
+
+        m_end = m_start + m_block_size;
+        m_current = m_start;
+    }
+
+
+    void  WBaseStream::WriteBlock()
+    {
+        int size = (int)(m_current - m_start);
+
+        //fseek( m_file, m_block_pos, SEEK_SET );
+        m_stream->put_buf(m_start, size);
+
+        m_current = m_start;
+
+        m_block_pos += size;
+    }
+
+
+    bool  WBaseStream::Open(output_stream *stream)
+    {
+        Close();
+        Allocate();
+
+        if (stream)
+        {
+            m_stream = stream;
+            m_is_opened = true;
+            m_block_pos = 0;
+            m_current = m_start;
+        }
+        return m_stream != 0;
+    }
+
+
+    void  WBaseStream::Close()
+    {
+        if (m_stream)
+        {
+            WriteBlock();
+            m_stream = 0;
+        }
+        m_is_opened = false;
+    }
+
+
+    void  WBaseStream::Release()
+    {
+        if (m_start)
+        {
+            delete[] m_start;
+        }
+        m_start = m_end = m_current = 0;
+    }
+
+
+    void  WBaseStream::SetBlockSize(int block_size)
+    {
+        assert(block_size > 0 && (block_size & (block_size - 1)) == 0);
+
+        if (m_start && block_size == m_block_size) return;
+        Release();
+        m_block_size = block_size;
+        Allocate();
+    }
+
+
+    int  WBaseStream::GetPos()
+    {
+        assert(IsOpened());
+        return m_block_pos + (int)(m_current - m_start);
+    }
+
+
+    ///////////////////////////// WLByteStream /////////////////////////////////// 
+
+    WLByteStream::~WLByteStream()
+    {
+    }
+
+    void WLByteStream::PutByte(int val)
+    {
+        *m_current++ = (uchar)val;
+        if (m_current >= m_end)
+            WriteBlock();
+    }
+
+
+    void WLByteStream::PutBytes(const void* buffer, int count)
+    {
+        uchar* data = (uchar*)buffer;
+
+        assert(data && m_current && count >= 0);
+
+        while (count)
+        {
+            int l = (int)(m_end - m_current);
+
+            if (l > count)
+                l = count;
+
+            if (l > 0)
+            {
+                memcpy(m_current, data, l);
+                m_current += l;
+                data += l;
+                count -= l;
+            }
+            if (m_current == m_end)
+                WriteBlock();
+        }
+    }
+
+
+    void WLByteStream::PutWord(int val)
+    {
+        uchar *current = m_current;
+
+        if (current + 1 < m_end)
+        {
+            current[0] = (uchar)val;
+            current[1] = (uchar)(val >> 8);
+            m_current = current + 2;
+            if (m_current == m_end)
+                WriteBlock();
+        }
+        else
+        {
+            PutByte(val);
+            PutByte(val >> 8);
+        }
+    }
+
+
+    void WLByteStream::PutDWord(int val)
+    {
+        uchar *current = m_current;
+
+        if (current + 3 < m_end)
+        {
+            current[0] = (uchar)val;
+            current[1] = (uchar)(val >> 8);
+            current[2] = (uchar)(val >> 16);
+            current[3] = (uchar)(val >> 24);
+            m_current = current + 4;
+            if (m_current == m_end)
+                WriteBlock();
+        }
+        else
+        {
+            PutByte(val);
+            PutByte(val >> 8);
+            PutByte(val >> 16);
+            PutByte(val >> 24);
+        }
+    }
+
+
+    ///////////////////////////// WMByteStream /////////////////////////////////// 
+
+    WMByteStream::~WMByteStream()
+    {
+    }
+
+
+    void WMByteStream::PutWord(int val)
+    {
+        uchar *current = m_current;
+
+        if (current + 1 < m_end)
+        {
+            current[0] = (uchar)(val >> 8);
+            current[1] = (uchar)val;
+            m_current = current + 2;
+            if (m_current == m_end)
+                WriteBlock();
+        }
+        else
+        {
+            PutByte(val >> 8);
+            PutByte(val);
+        }
+    }
+
+
+    void WMByteStream::PutDWord(int val)
+    {
+        uchar *current = m_current;
+
+        if (current + 3 < m_end)
+        {
+            current[0] = (uchar)(val >> 24);
+            current[1] = (uchar)(val >> 16);
+            current[2] = (uchar)(val >> 8);
+            current[3] = (uchar)val;
+            m_current = current + 4;
+            if (m_current == m_end)
+                WriteBlock();
+        }
+        else
+        {
+            PutByte(val >> 24);
+            PutByte(val >> 16);
+            PutByte(val >> 8);
+            PutByte(val);
+        }
+    }
+
+
+    ///////////////////////////// WMBitStream /////////////////////////////////// 
+
+    WMBitStream::WMBitStream()
+    {
+        m_pad_val = 0;
+        ResetBuffer();
+    }
+
+
+    WMBitStream::~WMBitStream()
+    {
+    }
+
+
+    bool  WMBitStream::Open(output_stream *stream)
+    {
+        ResetBuffer();
+        return WBaseStream::Open(stream);
+    }
+
+
+    void  WMBitStream::ResetBuffer()
+    {
+        m_val = 0;
+        m_bit_idx = 32;
+        m_current = m_start;
+    }
+
+    void  WMBitStream::Flush()
+    {
+        if (m_bit_idx < 32)
+        {
+            Put(m_pad_val, m_bit_idx & 7);
+            *((ulong*&)m_current)++ = m_val;
+        }
+    }
+
+
+    void  WMBitStream::Close()
+    {
+        if (m_is_opened)
+        {
+            Flush();
+            WBaseStream::Close();
+        }
+    }
+
+
+    void  WMBitStream::WriteBlock()
+    {
+        if (!bsIsBigEndian())
+            bsBSwapBlock(m_start, m_current);
+        WBaseStream::WriteBlock();
+    }
+
+
+    int  WMBitStream::GetPos()
+    {
+        return WBaseStream::GetPos() + ((32 - m_bit_idx) >> 3);
+    }
+
+
+    void  WMBitStream::Put(int val, int bits)
+    {
+        int  bit_idx = m_bit_idx - bits;
+        ulong  curval = m_val;
+
+        assert(0 <= bits && bits < 32);
+
+        val &= bs_bit_mask[bits];
+
+        if (bit_idx >= 0)
+        {
+            curval |= val << bit_idx;
+        }
+        else
+        {
+            *((ulong*&)m_current)++ = curval | ((unsigned)val >> -bit_idx);
+            if (m_current >= m_end)
+            {
+                WriteBlock();
+            }
+            bit_idx += 32;
+            curval = val << bit_idx;
+        }
+
+        m_val = curval;
+        m_bit_idx = bit_idx;
+    }
+
+
+    void  WMBitStream::PutHuff(int val, const ulong* table)
+    {
+        int min_val = (int)table[0];
+        val -= min_val;
+
+        //assert((unsigned)val < table[1]);
+
+        ulong code = table[val + 2];
+        assert(code != 0);
+
+        Put(code >> 8, code & 255);
+    }
+
+    ////////////////////// WJpegStream ///////////////////////
+
+    WJpegBitStream::WJpegBitStream()
+    {
+    }
+
+
+    WJpegBitStream::~WJpegBitStream()
+    {
+        Close();
+        m_is_opened = false;
+    }
+
+
+
+    bool  WJpegBitStream::Open(output_stream *stream)
+    {
+        Close();
+        Allocate();
+
+        m_is_opened = m_low_strm.Open(stream);
+        if (m_is_opened)
+        {
+            m_block_pos = 0;
+            ResetBuffer();
+        }
+        return m_is_opened;
+    }
+
+
+    void  WJpegBitStream::Close()
+    {
+        if (m_is_opened)
+        {
+            Flush();
+            m_low_strm.Close();
+            m_is_opened = false;
+        }
+    }
+
+
+    void  WJpegBitStream::Flush()
+    {
+        Put(-1, m_bit_idx & 31);
+        *((ulong*&)m_current)++ = m_val;
+        WriteBlock();
+        ResetBuffer();
+    }
+
+
+    void  WJpegBitStream::WriteBlock()
+    {
+        uchar* ptr = m_start;
+        if (!bsIsBigEndian())
+            bsBSwapBlock(m_start, m_current);
+
+        while (ptr < m_current)
+        {
+            int val = *ptr++;
+            m_low_strm.PutByte(val);
+            if (val == 0xff)
+            {
+                m_low_strm.PutByte(0);
+            }
+        }
+
+        m_current = m_start;
+    }
 }
-#endif
