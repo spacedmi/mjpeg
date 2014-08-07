@@ -147,7 +147,7 @@ namespace jcodec
         uchar m_pass_num;
         bool m_all_stream_writes_succeeded;
 
-        bool WriteImage(const uchar* data, int step, int width, int height, int _channels);
+        bool WriteImage(output_stream *pStream, const uchar* data, int step, int width, int height, int _channels);
         void emit_byte(uchar i);
         void emit_word(uint i);
         void emit_marker(int marker);
@@ -159,6 +159,7 @@ namespace jcodec
         void emit_sos();
         void emit_markers();
         void Put(int val, int bits);
+        void PutHuff(int val, const unsigned long* table);
         void compute_huffman_table(uint *codes, uchar *code_sizes, uchar *bits, uchar *val);
         void compute_quant_table(int *dst, short *src);
         void adjust_quant_table(int *dst, int *src);
@@ -207,7 +208,7 @@ namespace jcodec
         WBaseStream();
         virtual ~WBaseStream();
 
-        virtual bool  Open();
+        virtual bool  Open(output_stream *stream);
         virtual void  Close();
         void          SetBlockSize(int block_size);
         bool          IsOpened();
@@ -220,7 +221,7 @@ namespace jcodec
         uchar*  m_current;
         int     m_block_size;
         int     m_block_pos;
-        output_stream *m_stream;
+        output_stream*   m_stream;
         bool    m_is_opened;
 
         virtual void  WriteBlock();
@@ -281,7 +282,7 @@ namespace jcodec
         WMBitStream();
         virtual ~WMBitStream();
 
-        bool    Open();
+        bool    Open(output_stream *stream);
         void    Close();
         virtual void  Flush();
 
@@ -296,6 +297,21 @@ namespace jcodec
         virtual void  WriteBlock();
         void    ResetBuffer();
     };
+
+
+
+#define BSWAP(v)    (((v)<<24)|(((v)&0xff00)<<8)| \
+    (((v) >> 8) & 0xff00) | ((unsigned)(v) >> 24))
+
+    int* bsCreateSourceHuffmanTable(const uchar* src, int* dst,
+        int max_bits, int first_bits);
+    bool bsCreateDecodeHuffmanTable(const int* src, short* dst, int max_size);
+    bool bsCreateEncodeHuffmanTable(const int* src, ulong* dst, int max_size);
+
+    void bsBSwapBlock(uchar *start, uchar *end);
+    bool bsIsBigEndian(void);
+
+    extern const ulong bs_bit_mask[];
 
     class WJpegBitStream : public WMBitStream
     {
@@ -312,44 +328,4 @@ namespace jcodec
     protected:
         virtual void  WriteBlock();
     };
-
-    ///////////////////////////// base class for writers ////////////////////////////
-    class   GrFmtWriter
-    {
-    public:
-
-        GrFmtWriter();
-        virtual ~GrFmtWriter() {};
-        virtual bool  WriteImage(const uchar* data, int step,
-            int width, int height, int depth, int channels) = 0;
-    protected:
-        char    m_filename[_MAX_PATH]; // filename
-    };
-
-    class GrFmtJpegWriter : public GrFmtWriter
-    {
-    public:
-
-        GrFmtJpegWriter(const char* filename);
-        ~GrFmtJpegWriter();
-
-        bool  WriteImage(const uchar* data, int step,
-            int width, int height, int depth, int channels);
-
-        WJpegBitStream  m_strm;
-    };
-
-#define BSWAP(v)    (((v)<<24)|(((v)&0xff00)<<8)| \
-    (((v) >> 8) & 0xff00) | ((unsigned)(v) >> 24))
-
-    int* bsCreateSourceHuffmanTable(const uchar* src, int* dst,
-        int max_bits, int first_bits);
-    bool bsCreateDecodeHuffmanTable(const int* src, short* dst, int max_size);
-    bool bsCreateEncodeHuffmanTable(const int* src, ulong* dst, int max_size);
-
-    void bsBSwapBlock(uchar *start, uchar *end);
-    bool bsIsBigEndian(void);
-
-    extern const ulong bs_bit_mask[];
-
 }

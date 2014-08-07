@@ -15,7 +15,7 @@ int main(int, char**)
 	Mat img(rect.size(), CV_8UC3);
     img = imread("1920x1080.jpg");
     img.size();
-    int nframes = 100;
+    int nframes = 10;
     jcodec::MjpegWriter * j = new jcodec::MjpegWriter();
     VideoWriter outputVideo;
     
@@ -23,9 +23,9 @@ int main(int, char**)
     tt.start();
     double ttotal = 0;
 #if TEST_MY
-    j->Open("out.avi", (uchar)10, img.size());
+    j->Open("out.avi", (uchar)30, img.size());
 #else
-    outputVideo.open("out2.avi", outputVideo.fourcc('M', 'J', 'P', 'G'), 10.0, img.size(), true);
+    outputVideo.open("out2.avi", outputVideo.fourcc('M', 'J', 'P', 'G'), 30.0, img.size(), true);
 #endif
 
 	for (int i = 0; i < nframes; i++)

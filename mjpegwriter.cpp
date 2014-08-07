@@ -337,16 +337,19 @@ namespace jcodec
         static int m03 = static_cast<int>((128 + 0.5f) * SCALE), m13 = static_cast<int>((0.5f + 128) * SCALE),
             m23 = static_cast<int>(0.5f * SCALE);
 
+        static int Hm03 = static_cast<int>((0.5f) * SCALE), Hm13 = static_cast<int>((0.5f) * SCALE),
+            Hm23 = static_cast<int>(0.5f * SCALE);
+
         static void BGR_to_YCC(uchar *pDstY, uchar *pDstCb, uchar *pDstCr, const uchar *pSrc, int num_pixels)
         {
+            int x = 0;
+
+#if SSE
             __m128i m0 = _mm_setr_epi16(0, m00, m01, m02, m00, m01, m02, 0);
             __m128i m1 = _mm_setr_epi16(0, m10, m11, m12, m10, m11, m12, 0);
             __m128i m2 = _mm_setr_epi16(0, m20, m21, m22, m20, m21, m22, 0);
             __m128i m3 = _mm_setr_epi32(m03, m13, m23, 0);
             __m128i z = _mm_setzero_si128(), t0, t1, t2, r0, r1, v0, v1, v2, v3;
-            int x = 0;
-
-#if SSE
             for (; x <= (num_pixels - 8) * 3; x += 8 * 3, pDstCr += 8, pDstCb += 8, pDstY += 8)
             {
                 v0 = _mm_loadl_epi64((const __m128i*)(pSrc + x));
@@ -1069,6 +1072,7 @@ namespace jcodec
 
         // Higher level wrappers/examples (optional).
 #include <stdio.h>
+
         class memory_stream : public output_stream
         {
             memory_stream(const memory_stream &);
@@ -1113,7 +1117,7 @@ namespace jcodec
 
             buf_size = 0;
 #if HIGHGUI
-            WriteImage(pImage_data, width*3, width, height, num_channels);
+            WriteImage(&dst_stream, pImage_data, width * num_channels, width - 10, height - 10, num_channels);
 #else
             if (!init(&dst_stream, width, height, num_channels, comp_params))
                 return false;
@@ -1276,6 +1280,14 @@ namespace jcodec
         63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63
     };
 
+    static const uchar SSE_zigzag[] = 
+    { 
+        0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5,
+        12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28,
+        35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
+        58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
+        63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63 
+    };
     static const int idct_prescale[] =
     {
         16384, 22725, 21407, 19266, 16384, 12873, 8867, 4520,
@@ -1407,138 +1419,180 @@ namespace jcodec
             dst[3] = DCT_DESCALE(x3 * postscale[3], postshift);
         }
     }
-    #if 0
-    static void SSE_aan_fdct8x8(uchar *src, int *dst, const int *postscale)
+
+#if SSE
+#define SSE_SHIFT_
+#define SSE_DCT_DESCALE(x, n) (_mm_slli_epi16(_mm_adds_epi16((x), _mm_slli_epi16(_mm_set1_epi16(1), ((n) - 1))), (n)))
+
+    static void SSE_aan_fdct8x8(short *src, int *dst, int step, const short *postscale, const int comp_num)
     {
-        __m128i z = _mm_setzero_si128(), x0, x1, x2, x3, x4, x5, x6, x7;
-        __m128i workspace[8], *work = workspace;; // work
-     
+        const __m128i c0707 = _mm_set1_epi16(23167),
+            c0541 = _mm_set1_epi16(17727), 
+            c1307 = _mm_set1_epi16(21414), 
+            c0383 = _mm_set1_epi16(12550);
+        __m128i shiftY;
+        short dst_short[64];
+        if (comp_num < 4) shiftY = _mm_set1_epi16(128);
+        else shiftY = _mm_set1_epi16(0);
+        __m128i z = _mm_setzero_si128(), x0, x1, x2, x3, x4;
+        __m128i workspace[8], *work = workspace; // work
+
         // Pass 1: process columns
-            x0 = _mm_loadl_epi64((const __m128i*)(src));
-            x1 = _mm_loadl_epi64((const __m128i*)(src + 6 * 8));
-            x2 = _mm_loadl_epi64((const __m128i*)(src + 2 * 8));
-            x3 = _mm_loadl_epi64((const __m128i*)(src + 4 * 8));
+        x0 = _mm_loadu_si128((const __m128i*)(src + 0 * step));
+        x1 = _mm_loadu_si128((const __m128i*)(src + 7 * step));
+        x2 = _mm_loadu_si128((const __m128i*)(src + 3 * step));
+        x3 = _mm_loadu_si128((const __m128i*)(src + 4 * step));
 
-            // uchar -> short
-            x0 = _mm_unpacklo_epi8(x0, z);
-            x1 = _mm_unpackhi_epi8(x1, z);
-            x2 = _mm_unpackhi_epi8(x2, z);   
-            x3 = _mm_unpacklo_epi8(x3, z);
+        x4 = _mm_adds_epi16(x0, x1);   // x4 = x0 + x1
+        x0 = _mm_subs_epi16(x0, x1);   // x0 -= x1
 
-            x4 = _mm_add_epi16(x0, x1);   // x4 = x0 + x1
-            x0 = _mm_sub_epi16(x0, x1);   // x0 -= x1
+        x1 = _mm_adds_epi16(x2, x3);   // x1 = x2 + x3
+        x2 = _mm_subs_epi16(x2, x3);   // x2 -= x3
 
-            x1 = _mm_add_epi16(x2, x3);   // x1 = x2 + x3
-            x2 = _mm_sub_epi16(x2, x3);   // x2 -= x3
+        work[7] = x0; work[1] = x2;
 
-            work[7] = x0; work[1] = x2;
+        x2 = _mm_adds_epi16(x4, x1);   // x2 = x4 + x1
+        x4 = _mm_subs_epi16(x4, x1);   // x4 -= x1
 
-            x2 = _mm_add_epi16(x4, x1);   // x2 = x4 + x1
-            x4 = _mm_sub_epi16(x4, x1);   // x4 -= x1
+        x0 = _mm_loadu_si128((const __m128i*)(src + 1 * step));
+        x3 = _mm_loadu_si128((const __m128i*)(src + 6 * step));
 
-            x0 = _mm_loadl_epi64((const __m128i*)(src)); 
-            x3 = _mm_loadl_epi64((const __m128i*)(src + 6 * 8));
+        x1 = _mm_adds_epi16(x0, x3);   // x1 = x0 + x3
+        x0 = _mm_subs_epi16(x0, x3);   // x0 -= x3
 
-            // uchar -> short
-            x0 = _mm_unpackhi_epi8(x0, z);
-            x3 = _mm_unpacklo_epi8(x3, z);
+        work[5] = x0;
 
-            x1 = _mm_add_epi16(x0, x3);   // x1 = x0 + x3
-            x0 = _mm_sub_epi16(x0, x3);   // x0 -= x3
+        x0 = _mm_loadu_si128((const __m128i*)(src + 2 * step));
+        x3 = _mm_loadu_si128((const __m128i*)(src + 5 * step));
 
-            work[5] = x0;
+        work[3] = _mm_sub_epi16(x0, x3);
 
-            x0 = _mm_loadl_epi64((const __m128i*)(src + 2 * 8));
-            x3 = _mm_loadl_epi64((const __m128i*)(src + 4 * 8));
+        x0 = _mm_adds_epi16(x0, x3);   // x0 += x3
+        x3 = _mm_adds_epi16(x0, x1);   // x3 = x0 + x1
+        x0 = _mm_subs_epi16(x0, x1);   // x0 -= x1
+        x1 = _mm_adds_epi16(x2, x3);   // x1 = x2 + x3
+        x2 = _mm_subs_epi16(x2, x3);   // x2 -= x3
 
-            // uchar -> short
-            x0 = _mm_unpacklo_epi8(x0, z);
-            x3 = _mm_unpackhi_epi8(x3, z);
+        work[0] = x1; work[4] = x2;
 
-            work[3] = _mm_sub_epi16(x0, x3);
+        x0 = _mm_mulhi_epi16(_mm_adds_epi16(_mm_subs_epi16(x0, x4), _mm_subs_epi16(x0, x4)), c0707); // DCT_DESCALE((x0 - x4) * C0_707, fixb);
 
-            x0 = _mm_add_epi16(x0, x3);   // x0 += x3
-            x3 = _mm_add_epi16(x0, x1);   // x3 = x0 + x1
-            x0 = _mm_sub_epi16(x0, x1);   // x0 -= x1
-            x1 = _mm_add_epi16(x2, x3);   // x1 = x2 + x3
-            x2 = _mm_sub_epi16(x2, x3);   // x2 -= x3
+        x1 = _mm_adds_epi16(x4, x0);   // x1 = x4 + x0
+        x4 = _mm_subs_epi16(x4, x0);   // x4 -= x0
 
-            work[0] = x1; work[4] = x2;
+        work[2] = x4; work[6] = x1;
 
-            x0 = SSE_DCT_DESCALE((x0 - x4) * C0_707, fixb);
-            x1 = x4 + x0; x4 -= x0;
-            work[2] = x4; work[6] = x1;
+        x0 = work[1]; x1 = work[3];
+        x2 = work[5]; x3 = work[7];
 
-            x0 = work[1]; x1 = work[3];
-            x2 = work[5]; x3 = work[7];
+        x0 = _mm_adds_epi16(x0, x1);   // x0 += x1
+        x1 = _mm_adds_epi16(x1, x2);   // x1 += x2
+        x2 = _mm_adds_epi16(x2, x3);   // x2 += x3
 
-            x0 += x1; x1 += x2; x2 += x3;
-            x1 = SSE_DCT_DESCALE(x1*C0_707, fixb);
+        x1 = _mm_mulhi_epi16(_mm_adds_epi16(x1, x1), c0707); // DCT_DESCALE(x1 * C0_707, fixb);
 
-            x4 = x1 + x3; x3 -= x1;
-            x1 = (x0 - x2)*C0_382;
-            x0 = SSE_DCT_DESCALE(x0 * C0_541 + x1, fixb);
-            x2 = SSE_DCT_DESCALE(x2 * C1_306 + x1, fixb);
+        x4 = _mm_adds_epi16(x1, x3);   // x4 = x1 + x3
+        x3 = _mm_subs_epi16(x3, x1);   // x3 -= x1
 
-            x1 = x0 + x3; x3 -= x0;
-            x0 = x4 + x2; x4 -= x2;
+        x1 = _mm_mulhi_epi16(_mm_slli_epi16(_mm_subs_epi16(x0, x2), 1), c0383);  // (x0 - x2) * C0_382;
+        x0 = _mm_adds_epi16(_mm_mulhi_epi16(_mm_adds_epi16(x0, x0), c0541), x1); // SSE_DCT_DESCALE(x0 * C0_541 + x1, fixb);
+        x2 = _mm_adds_epi16(_mm_mulhi_epi16(_mm_slli_epi16(x0, 2), c1307), x1);  // SSE_DCT_DESCALE(x2 * C1_306 + x1, fixb);
 
-            work[5] = x1; work[1] = x0;
-            work[7] = x4; work[3] = x3;
-        }
+        x1 = _mm_adds_epi16(x0, x3);   // x1 = x0 + x3
+        x3 = _mm_subs_epi16(x3, x0);   // x3 -= x0
+        x0 = _mm_adds_epi16(x4, x2);   // x0 = x4 + x2
+        x4 = _mm_subs_epi16(x4, x2);   // x4 -= x2
 
-        work = workspace;
+        work[5] = x1; work[1] = x0;
+        work[7] = x4; work[3] = x3;
+
         // pass 2: process rows
-        for (i = 8; i > 0; i--, work++, postscale += 8, dst += 8)
+
+        x0 = work[0], x1 = work[7];
+        x2 = work[3], x3 = work[4];
+
+        x4 = _mm_adds_epi16(x0, x1);   // x4 = x0 + x1
+        x0 = _mm_subs_epi16(x0, x1);   // x0 -= x1
+
+        x1 = _mm_adds_epi16(x2, x3);   // x1 = x2 + x3
+        x2 = _mm_subs_epi16(x2, x3);   // x2 -= x3
+
+        work[7] = x0; work[0] = x2;
+            
+        x2 = _mm_adds_epi16(x4, x1);   // x2 = x4 + x1
+        x4 = _mm_subs_epi16(x4, x1);   // x4 -= x1
+
+        x0 = work[1]; x3 = work[6];
+
+        x1 = _mm_adds_epi16(x0, x3);   // x1 = x0 + x3
+        x0 = _mm_subs_epi16(x0, x3);   // x0 -= x3
+
+        work[4] = x0;
+
+        x0 = work[2]; x3 = work[5];
+
+        work[3] = _mm_sub_epi16(x0, x3);
+
+        x0 = _mm_adds_epi16(x0, x3);   // x0 += x3
+        x3 = _mm_adds_epi16(x0, x1);   // x3 = x0 + x1
+        x0 = _mm_subs_epi16(x0, x1);   // x0 -= x1
+        x1 = _mm_adds_epi16(x2, x3);   // x1 = x2 + x3
+        x2 = _mm_subs_epi16(x2, x3);   // x2 -= x3
+
+        work[1] = _mm_mulhi_epi16(x1, _mm_loadu_si128((const __m128i*)(postscale + 0 * 8))); // DCT_DESCALE(x1 * postscale[0], postshift);
+        work[2] = _mm_mulhi_epi16(x2, _mm_loadu_si128((const __m128i*)(postscale + 4 * 8))); // DCT_DESCALE(x2 * postscale[4], postshift);
+        _mm_storeu_si128((__m128i*)(dst_short + 0 * 8), work[1]);
+        _mm_storeu_si128((__m128i*)(dst_short + 4 * 8), work[2]);
+
+        x0 = _mm_mulhi_epi16(_mm_slli_epi16(_mm_subs_epi16(x0, x4), 1), c0707); // DCT_DESCALE((x0 - x4)*C0_707, fixb);
+
+        x1 = _mm_adds_epi16(x4, x0);   // x1 = x4 + x0
+        x4 = _mm_subs_epi16(x4, x0);   // x4 -= x0
+
+        work[1] = _mm_mulhi_epi16(x4, _mm_loadu_si128((const __m128i*)(postscale + 2 * 8))); // DCT_DESCALE(x4 * postscale[2], postshift);
+        work[2] = _mm_mulhi_epi16(x1, _mm_loadu_si128((const __m128i*)(postscale + 6 * 8))); // DCT_DESCALE(x1 * postscale[6], postshift);
+        _mm_storeu_si128((__m128i*)(dst_short + 2 * 8), work[1]);
+        _mm_storeu_si128((__m128i*)(dst_short + 6 * 8), work[2]);
+
+        x0 = work[0]; x1 = work[3];
+        x2 = work[4]; x3 = work[7];
+
+        x0 = _mm_adds_epi16(x0, x1);   // x0 += x1
+        x1 = _mm_adds_epi16(x1, x2);   // x1 += x2
+        x2 = _mm_adds_epi16(x2, x3);   // x2 += x3
+
+        x1 = _mm_mulhi_epi16(_mm_adds_epi16(x1, x1), c0707); // DCT_DESCALE(x1 * C0_707, fixb);
+
+        x4 = _mm_adds_epi16(x1, x3);   // x4 = x1 + x3
+        x3 = _mm_subs_epi16(x3, x1);   // x3 -= x1
+
+        x1 = _mm_mulhi_epi16(_mm_slli_epi16(_mm_subs_epi16(x0, x2), 1), c0383); // (x0 - x2) * C0_382;
+
+        x0 = _mm_adds_epi16(_mm_mulhi_epi16(_mm_adds_epi16(x0, x0), c0541), x1); // SSE_DCT_DESCALE(x0 * C0_541 + x1, fixb);
+        x2 = _mm_adds_epi16(_mm_mulhi_epi16(_mm_slli_epi16(x0, 2), c1307), x1);  // SSE_DCT_DESCALE(x2 * C1_306 + x1, fixb);
+
+        x1 = _mm_adds_epi16(x0, x3);   // x1 = x0 + x3
+        x3 = _mm_subs_epi16(x3, x0);   // x3 -= x0
+        x0 = _mm_adds_epi16(x4, x2);   // x0 = x4 + x2
+        x4 = _mm_subs_epi16(x4, x2);   // x4 -= x2
+
+        work[1] = _mm_mulhi_epi16(x1, _mm_loadu_si128((const __m128i*)(postscale + 5 * 8))); // DCT_DESCALE(x1 * postscale[5], postshift);
+        work[2] = _mm_mulhi_epi16(x0, _mm_loadu_si128((const __m128i*)(postscale + 1 * 8))); // DCT_DESCALE(x0 * postscale[1], postshift);
+        work[3] = _mm_mulhi_epi16(x4, _mm_loadu_si128((const __m128i*)(postscale + 7 * 8))); // DCT_DESCALE(x4 * postscale[7], postshift);
+        work[4] = _mm_mulhi_epi16(x3, _mm_loadu_si128((const __m128i*)(postscale + 3 * 8))); // DCT_DESCALE(x3 * postscale[3], postshift);
+        _mm_storeu_si128((__m128i*)(dst_short + 5 * 8), work[1]);
+        _mm_storeu_si128((__m128i*)(dst_short + 1 * 8), work[2]);
+        _mm_storeu_si128((__m128i*)(dst_short + 7 * 8), work[3]);
+        _mm_storeu_si128((__m128i*)(dst_short + 3 * 8), work[4]);
+
+        // for test only
+        for (int k = 0; k < 64; k++)
         {
-            int  x0 = work[8 * 0], x1 = work[8 * 7];
-            int  x2 = work[8 * 3], x3 = work[8 * 4];
-
-            int  x4 = x0 + x1; x0 -= x1;
-            x1 = x2 + x3; x2 -= x3;
-
-            work[8 * 7] = x0; work[8 * 0] = x2;
-            x2 = x4 + x1; x4 -= x1;
-
-            x0 = work[8 * 1]; x3 = work[8 * 6];
-            x1 = x0 + x3; x0 -= x3;
-            work[8 * 4] = x0;
-
-            x0 = work[8 * 2]; x3 = work[8 * 5];
-            work[8 * 3] = x0 - x3; x0 += x3;
-
-            x3 = x0 + x1; x0 -= x1;
-            x1 = x2 + x3; x2 -= x3;
-
-            dst[0] = DCT_DESCALE(x1 * postscale[0], postshift);
-            dst[4] = DCT_DESCALE(x2 * postscale[4], postshift);
-
-            x0 = DCT_DESCALE((x0 - x4)*C0_707, fixb);
-            x1 = x4 + x0; x4 -= x0;
-
-            dst[2] = DCT_DESCALE(x4 * postscale[2], postshift);
-            dst[6] = DCT_DESCALE(x1 * postscale[6], postshift);
-
-            x0 = work[8 * 0]; x1 = work[8 * 3];
-            x2 = work[8 * 4]; x3 = work[8 * 7];
-
-            x0 += x1; x1 += x2; x2 += x3;
-            x1 = DCT_DESCALE(x1*C0_707, fixb);
-
-            x4 = x1 + x3; x3 -= x1;
-            x1 = (x0 - x2) * C0_382;
-            x0 = DCT_DESCALE(x0 * C0_541 + x1, fixb);
-            x2 = DCT_DESCALE(x2 * C1_306 + x1, fixb);
-
-            x1 = x0 + x3; x3 -= x0;
-            x0 = x4 + x2; x4 -= x2;
-
-            dst[5] = DCT_DESCALE(x1 * postscale[5], postshift);
-            dst[1] = DCT_DESCALE(x0 * postscale[1], postshift);
-            dst[7] = DCT_DESCALE(x4 * postscale[7], postshift);
-            dst[3] = DCT_DESCALE(x3 * postscale[3], postshift);
+            *dst++ = (int)dst_short[k];
         }
+
     }
+
     #endif
 
     bool bsCreateEncodeHuffmanTable(const int* src, unsigned long* table, int max_size)
@@ -1554,7 +1608,7 @@ namespace jcodec
 
             for (code_count += k; k < code_count; k++)
             {
-                int val = src[k] >> huff_val_shift;
+                int  val = src[k] > huff_val_shift;
                 if (val < min_val)
                     min_val = val;
                 if (val > max_val)
@@ -1613,12 +1667,12 @@ namespace jcodec
         return  table;
     }
 
-    bool jpeg_encoder::WriteImage(const uchar* data, int step,
+    bool jpeg_encoder::WriteImage(output_stream *pStream, const uchar* data, int step,
         int width, int height, int _channels)
     {
-        WJpegBitStream m_strm;
         assert(data && width > 0 && height > 0);
-        if (!m_strm.Open(m_pStream)) return false;
+        WJpegBitStream  m_strm;
+        if (!m_strm.Open(pStream)) return false;
 
         // encode the header and tables
         // for each mcu:
@@ -1628,10 +1682,11 @@ namespace jcodec
         //     encode block.
         int x, y;
         int i, j;
-        const int max_quality = 12;
+        const int max_quality = 3;
         int   quality = max_quality;
         WMByteStream& lowstrm = m_strm.m_low_strm;
         int   fdct_qtab[2][64];
+        short SSE_fdct_qtab[2][64];
         ulong huff_dc_tab[2][16];
         ulong huff_ac_tab[2][256];
         int  channels = _channels > 1 ? 3 : 1;
@@ -1640,13 +1695,18 @@ namespace jcodec
         int  x_step = x_scale * 8;
         int  y_step = y_scale * 8;
         int  block[6][64];
+        short  block_short[6][64];
         int  buffer[1024];
         int  luma_count = x_scale*y_scale;
         int  block_count = luma_count + channels - 1;
         int  Y_step = x_scale * 8;
         const int UV_step = 16;
         double inv_quality;
-
+#if SSE
+        const uchar *z_zag = SSE_zigzag;
+#else
+        const uchar *z_zag = zigzag;
+#endif
         if (quality < 3) quality = 3;
         if (quality > max_quality) quality = max_quality;
 
@@ -1668,7 +1728,7 @@ namespace jcodec
             // put coefficients
             for (j = 0; j < 64; j++)
             {
-                int idx = zigzag[j];
+                int idx = z_zag[j];
                 int qval = cvRound(qtable[idx] * inv_quality);
                 if (qval < 1)
                     qval = 1;
@@ -1676,6 +1736,8 @@ namespace jcodec
                     qval = 255;
                 fdct_qtab[i][idx] = cvRound((1 << (postshift + 9)) /
                     (qval*chroma_scale*idct_prescale[idx]));
+                SSE_fdct_qtab[i][idx] = (short)cvRound((1 << (postshift + 9)) /
+                    (qval*chroma_scale*idct_prescale[idx]) * 14);
                 lowstrm.PutByte(qval);
             }
         }
@@ -1741,18 +1803,212 @@ namespace jcodec
             {
                 int x_limit = x_step;
                 int y_limit = y_step;
-                const uchar* rgb_data = data + x*_channels;
                 int* Y_data = block[0];
+                const uchar* rgb_data = data + x*_channels;
 
                 if (x + x_limit > width) x_limit = width - x;
                 if (y + y_limit > height) y_limit = height - y;
 
                 memset(block, 0, block_count * 64 * sizeof(block[0][0]));
+                memset(block_short, 0, block_count * 64 * sizeof(block_short[0][0]));
 
                 if (channels > 1)
                 {
-                    int* UV_data = block[luma_count];
+#if SSE
+                    short* Y_data = block_short[0];
+                    short* UV_data = block_short[luma_count];
+                    __m128i m0 = _mm_setr_epi16(0, m00, m01, m02, m00, m01, m02, 0);
+                    __m128i m1 = _mm_setr_epi16(0, m10, m11, m12, m10, m11, m12, 0);
+                    __m128i m2 = _mm_setr_epi16(0, m20, m21, m22, m20, m21, m22, 0);
+                    __m128i m3 = _mm_setr_epi32(Hm03, Hm13, Hm23, 0);
+                    __m128i z = _mm_setzero_si128(), t0, t1, t2, r0, r1, v0, v1, v2, v3, shiftY = _mm_set1_epi16(512);
+                    __m128i U[4], V[4];
+                    int str_count = 0;
+                    const int SSE_step = 8;
+                    if ((y_limit == 16) && (x_limit == 16)) 
+                        for (i = 0; i < y_limit; i++, rgb_data += step, Y_data += Y_step)
+                        {
+                            for (j = 0; j < x_limit; j += SSE_step, rgb_data += _channels * SSE_step)
+                            {
+                                v0 = _mm_loadl_epi64((const __m128i*)(rgb_data));
+                                v1 = _mm_loadl_epi64((const __m128i*)(rgb_data + 8));
+                                v2 = _mm_loadl_epi64((const __m128i*)(rgb_data + 16));
+                                v0 = _mm_unpacklo_epi8(v0, z); // b0 g0 r0 b1 g1 r1 b2 g2
+                                v1 = _mm_unpacklo_epi8(v1, z); // r2 b3 g3 r3 b4 g4 r4 b5
+                                v2 = _mm_unpacklo_epi8(v2, z); // g5 r5 b6 g6 r6 b7 g7 r7
 
+                                v3 = _mm_srli_si128(v2, 2); // ? b6 g6 r6 b7 g7 r7 0
+                                v2 = _mm_or_si128(_mm_slli_si128(v2, 10), _mm_srli_si128(v1, 6)); // ? b4 g4 r4 b5 g5 r5 ?
+                                v1 = _mm_or_si128(_mm_slli_si128(v1, 6), _mm_srli_si128(v0, 10)); // ? b2 g2 r2 b3 g3 r3 ?
+                                v0 = _mm_slli_si128(v0, 2); // 0 b0 g0 r0 b1 g1 r1 ?
+
+                                // process pixels 0 & 1
+                                t0 = _mm_madd_epi16(v0, m0); // a0 b0 a1 b1
+                                t1 = _mm_madd_epi16(v0, m1); // c0 d0 c1 d1
+                                t2 = _mm_madd_epi16(v0, m2); // e0 f0 e1 f1
+                                v0 = _mm_unpacklo_epi32(t0, t1); // a0 c0 b0 d0
+                                t0 = _mm_unpackhi_epi32(t0, t1); // a1 c1 b1 d1
+                                t1 = _mm_unpacklo_epi32(t2, z);  // e0 0 f0 0
+                                t2 = _mm_unpackhi_epi32(t2, z);  // e1 0 f1 0
+                                __m128i mid = _mm_add_epi32(_mm_unpacklo_epi64(v0, t1), _mm_unpackhi_epi64(v0, t1));
+                                r0 = _mm_add_epi32(mid , m3); // V0 U0 Y0 0
+                                r1 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(t0, t2), _mm_unpackhi_epi64(t0, t2)), m3); // V1 U1 Y1 0
+                                r0 = _mm_srai_epi32(r0, BITS - 2);
+                                r1 = _mm_srai_epi32(r1, BITS - 2);
+                                v0 = _mm_packs_epi32(r0, r1); // V0 U0 Y0 0 V1 U1 Y1 0
+
+                                // process pixels 2 & 3
+                                t0 = _mm_madd_epi16(v1, m0); // a0 b0 a1 b1
+                                t1 = _mm_madd_epi16(v1, m1); // c0 d0 c1 d1
+                                t2 = _mm_madd_epi16(v1, m2); // e0 f0 e1 f1
+                                v1 = _mm_unpacklo_epi32(t0, t1); // a0 c0 b0 d0
+                                t0 = _mm_unpackhi_epi32(t0, t1); // a1 b1 c1 d1
+                                t1 = _mm_unpacklo_epi32(t2, z);  // e0 0 f0 0
+                                t2 = _mm_unpackhi_epi32(t2, z);  // e1 0 f1 0
+                                r0 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(v1, t1), _mm_unpackhi_epi64(v1, t1)), m3); // V2 U2 Y2 0
+                                r1 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(t0, t2), _mm_unpackhi_epi64(t0, t2)), m3); // V3 U3 Y3 0
+                                r0 = _mm_srai_epi32(r0, BITS - 2);
+                                r1 = _mm_srai_epi32(r1, BITS - 2);
+                                v1 = _mm_packs_epi32(r0, r1); // V2 U2 Y2 0 V3 U3 Y3 0
+
+                                r0 = _mm_unpacklo_epi16(v0, v1); // V0 V2 U0 U2 Y0 Y2 0 0
+                                v1 = _mm_unpackhi_epi16(v0, v1); // V1 V3 U1 U3 Y1 Y3 0 0
+                                v0 = _mm_unpacklo_epi16(r0, v1); // V0 V1 V2 V3 U0 U1 U2 U3
+                                v1 = _mm_unpackhi_epi16(r0, v1); // Y0 Y1 Y2 Y3 0 0 0 0
+
+                                //  process pixels 4 & 5
+                                t0 = _mm_madd_epi16(v2, m0); // a0 b0 a1 b1
+                                t1 = _mm_madd_epi16(v2, m1); // c0 d0 c1 d1
+                                t2 = _mm_madd_epi16(v2, m2); // e0 f0 e1 f1
+                                v2 = _mm_unpacklo_epi32(t0, t1); // a0 c0 b0 d0
+                                t0 = _mm_unpackhi_epi32(t0, t1); // a1 b1 c1 d1
+                                t1 = _mm_unpacklo_epi32(t2, z);  // e0 0 f0 0
+                                t2 = _mm_unpackhi_epi32(t2, z);  // e1 0 f1 0
+                                r0 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(v2, t1), _mm_unpackhi_epi64(v2, t1)), m3); // V4 U4 Y4 0
+                                r1 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(t0, t2), _mm_unpackhi_epi64(t0, t2)), m3); // V5 U5 Y5 0
+                                r0 = _mm_srai_epi32(r0, BITS - 2);
+                                r1 = _mm_srai_epi32(r1, BITS - 2);
+                                v2 = _mm_packs_epi32(r0, r1); // V4 U4 Y4 0 V5 U5 Y5 0
+
+                                // proce ss pixels 6 & 7
+                                t0 = _mm_madd_epi16(v3, m0); // a0 b0 a1 b1
+                                t1 = _mm_madd_epi16(v3, m1); // c0 d0 c1 d1
+                                t2 = _mm_madd_epi16(v3, m2); // e0 f0 e1 f1
+                                v3 = _mm_unpacklo_epi32(t0, t1); // a0 c0 b0 d0
+                                t0 = _mm_unpackhi_epi32(t0, t1); // a1 b1 c1 d1
+                                t1 = _mm_unpacklo_epi32(t2, z);  // e0 0 f0 0
+                                t2 = _mm_unpackhi_epi32(t2, z);  // e1 0 f1 0
+                                r0 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(v3, t1), _mm_unpackhi_epi64(v3, t1)), m3); // V6 U6 Y6 0
+                                r1 = _mm_add_epi32(_mm_add_epi32(_mm_unpacklo_epi64(t0, t2), _mm_unpackhi_epi64(t0, t2)), m3); // V7 U7 Y7 0
+                                r0 = _mm_srai_epi32(r0, BITS - 2);
+                                r1 = _mm_srai_epi32(r1, BITS - 2);
+                                v3 = _mm_packs_epi32(r0, r1); // V6 U6 Y6 0 V7 U7 Y7 0
+
+                                r0 = _mm_unpacklo_epi16(v2, v3); // V4 V6 U4 U6 Y4 Y6 0 0
+                                v3 = _mm_unpackhi_epi16(v2, v3); // V5 V7 U5 U7 Y5 Y7 0 0
+                                v2 = _mm_unpacklo_epi16(r0, v3); // V4 V5 V6 V7 U4 U5 U6 U7
+                                v3 = _mm_unpackhi_epi16(r0, v3); // Y4 Y5 Y6 Y7 0 0 0 0
+
+                                // Y record
+                                t2 = _mm_unpacklo_epi64(v1, v3); // Y0 ... Y7
+                                t2 = _mm_subs_epi16(t2, shiftY);
+                                _mm_storeu_si128((__m128i*)(Y_data + j), t2);
+
+                                // U, V record
+                                t0 = _mm_unpacklo_epi64(v0, v2); // V0 ... V7
+                                t1 = _mm_unpackhi_epi64(v0, v2); // U0 ... U7
+                                V[str_count] = t0;
+                                U[str_count] = t1;
+                                str_count++;
+                            }
+
+                            rgb_data -= x_limit*_channels;
+
+                            if (((i + 1) & (y_scale - 1)) == 0)
+                            {
+                                __m128i mask = _mm_set1_epi32(65535), delta = _mm_set1_epi16(2), res0, res1, res2, res3;
+
+                                t0 = _mm_and_si128(U[0], mask); // u0 0 u2 0 u4 0 ...
+                                v0 = _mm_srli_epi32(U[0], 16);   // u1 0 u3 0 u5 0 ...
+                                t1 = _mm_and_si128(U[2], mask); // u0' 0 u2' 0 u4' 0 ...
+                                v1 = _mm_srli_epi32(U[2], 16);   // u1' 0 u3' 0 u5' 0 ...
+                                res0 = _mm_adds_epi16(_mm_adds_epi16(t0, v0), _mm_adds_epi16(t1, v1)); // U1 0 U2 0 U3 0 U4 0
+                                t0 = _mm_and_si128(U[1], mask); // u0 0 u2 0 u4 0 ...
+                                v0 = _mm_srli_epi32(U[1], 16);   // u1 0 u3 0 u5 0 ...
+                                t1 = _mm_and_si128(U[3], mask); // u0' 0 u2' 0 u4' 0 ...
+                                v1 = _mm_srli_epi32(U[3], 16);   // u1' 0 u3' 0 u5' 0 ...
+                                res1 = _mm_adds_epi16(_mm_add_epi16(t0, v0), _mm_adds_epi16(t1, v1)); // U5 0 U6 0 U7 0 U8 0
+
+                                res2 = _mm_unpacklo_epi32(res0, res1); // U1 0 U5 0 U2 0 U6 0
+                                res3 = _mm_unpackhi_epi32(res0, res1); // U3 0 U7 0 U4 0 U8 0
+                                res0 = _mm_unpacklo_epi32(res2, res3); // U1 0 U3 0 U5 0 U7 0
+                                res1 = _mm_unpackhi_epi32(res2, res3); // U2 0 U4 0 U6 0 U8 0
+                                res1 = _mm_slli_epi32(res1, 16);       // 0 u2 0 u4 0 u6 0 u8
+
+                                _mm_storeu_si128((__m128i*)UV_data, _mm_adds_epi16(res0, res1));
+
+                                t0 = _mm_and_si128(V[0], mask); // v0 0 v2 0 v4 0 ...
+                                v0 = _mm_srli_epi32(V[0], 16);   // v1 0 v3 0 v5 0 ...
+                                t1 = _mm_and_si128(V[2], mask); // v0' 0 v2' 0 v4' 0 ...
+                                v1 = _mm_srli_epi32(V[2], 16);   // v1' 0 v3' 0 v5' 0 ...
+                                res0 = _mm_adds_epi16(_mm_adds_epi16(t0, v0), _mm_adds_epi16(t1, v1)); // V1 0 V2 0 V3 0 V4 0
+                                t0 = _mm_and_si128(V[1], mask); // v0 0 v2 0 v4 0 ...
+                                v0 = _mm_srli_epi32(V[1], 16);   // v1 0 v3 0 v5 0 ...
+                                t1 = _mm_and_si128(V[3], mask); // v0' 0 v2' 0 v4' 0 ...
+                                v1 = _mm_srli_epi32(V[3], 16);   // v1' 0 v3' 0 v5' 0 ...
+                                res1 = _mm_adds_epi16(_mm_adds_epi16(t0, v0), _mm_adds_epi16(t1, v1)); // V5 0 V6 0 V7 0 V8 0
+
+                                res2 = _mm_unpacklo_epi32(res0, res1); // V1 0 V5 0 V2 0 V6 0
+                                res3 = _mm_unpackhi_epi32(res0, res1); // V3 0 V7 0 V4 0 V8 0
+                                res0 = _mm_unpacklo_epi32(res2, res3); // V1 0 V3 0 V5 0 V7 0
+                                res1 = _mm_unpackhi_epi32(res2, res3); // V2 0 V4 0 V6 0 V8 0
+                                res1 = _mm_slli_epi32(res1, 16);       // 0 V2 0 V4 0 V6 0 V8
+
+                                _mm_storeu_si128((__m128i*)(UV_data + 8), _mm_adds_epi16(res0, res1));
+
+                                str_count = 0;
+                                UV_data += UV_step;
+                            }
+                        }
+                    else
+                    {
+                        for (i = 0; i < y_limit; i++, rgb_data += step, Y_data += Y_step)
+                        {
+                            for (j = 0; j < x_limit; j++, rgb_data += _channels)
+                            {
+                                int r = rgb_data[2];
+                                int g = rgb_data[1];
+                                int b = rgb_data[0];
+
+                                int Y = DCT_DESCALE(r*y_r + g*y_g + b*y_b, fixc - 2) - 128 * 4;
+                                int U = DCT_DESCALE(r*cb_r + g*cb_g + b*cb_b, fixc - 2);
+                                int V = DCT_DESCALE(r*cr_r + g*cr_g + b*cr_b, fixc - 2);
+
+                                int j2 = j >> (x_scale - 1);
+
+                                Y_data[j] = (short)Y;
+                                UV_data[j2] += (short)U;
+                                UV_data[j2 + 8] += (short)V;
+                            }
+                            rgb_data -= x_limit*_channels;
+                            if (((i + 1) & (y_scale - 1)) == 0)
+                            {
+                                UV_data += UV_step;
+                            }
+                        }
+                    }
+                    //// for test only
+                    //for (int k = 0; k < 64; k++)
+                    //{
+                    //    block[0][k] = (int)block_short[0][k];
+                    //    block[1][k] = (int)block_short[1][k];
+                    //    block[2][k] = (int)block_short[2][k];
+                    //    block[3][k] = (int)block_short[3][k];
+                    //    block[4][k] = (int)block_short[4][k];
+                    //    block[5][k] = (int)block_short[5][k];
+                    //}
+#else
+                    int* UV_data = block[luma_count];
                     for (i = 0; i < y_limit; i++, rgb_data += step, Y_data += Y_step)
                     {
                         for (j = 0; j < x_limit; j++, rgb_data += _channels)
@@ -1764,19 +2020,20 @@ namespace jcodec
                             int Y = DCT_DESCALE(r*y_r + g*y_g + b*y_b, fixc - 2) - 128 * 4;
                             int U = DCT_DESCALE(r*cb_r + g*cb_g + b*cb_b, fixc - 2);
                             int V = DCT_DESCALE(r*cr_r + g*cr_g + b*cr_b, fixc - 2);
+
                             int j2 = j >> (x_scale - 1);
 
                             Y_data[j] = Y;
                             UV_data[j2] += U;
                             UV_data[j2 + 8] += V;
                         }
-
                         rgb_data -= x_limit*_channels;
                         if (((i + 1) & (y_scale - 1)) == 0)
                         {
                             UV_data += UV_step;
                         }
                     }
+#endif
                 }
                 else
                 {
@@ -1792,16 +2049,20 @@ namespace jcodec
                     int is_chroma = i >= luma_count;
                     int src_step = x_scale * 8;
                     int run = 0, val;
+#if SSE
+                    short* src_ptr = block_short[i & -2] + (i & 1) * 8;
+                    const ulong* htable = huff_ac_tab[is_chroma];
+                    SSE_aan_fdct8x8(src_ptr, buffer, src_step, SSE_fdct_qtab[is_chroma], i);
+#else
                     int* src_ptr = block[i & -2] + (i & 1) * 8;
                     const ulong* htable = huff_ac_tab[is_chroma];
-
                     aan_fdct8x8(src_ptr, buffer, src_step, fdct_qtab[is_chroma]);
-
-                    j = is_chroma + (i > luma_count);
-                    val = buffer[0] - dc_pred[j];
-                    dc_pred[j] = buffer[0];
-
+                    
+#endif
                     {
+                        j = is_chroma + (i > luma_count);
+                        val = buffer[0] - dc_pred[j];
+                        dc_pred[j] = buffer[0];
                         float a = (float)val;
                         int cat = (((int&)a >> 23) & 255) - (126 & (val ? -1 : 0));
 
@@ -1812,7 +2073,8 @@ namespace jcodec
 
                     for (j = 1; j < 64; j++)
                     {
-                        val = buffer[zigzag[j]];
+
+                        val = buffer[z_zag[j]];
 
                         if (val == 0)
                         {
@@ -1888,6 +2150,102 @@ namespace jcodec
         return (((const int*)"\0\x1\x2\x3\x4\x5\x6\x7")[0] & 255) != 0;
     }
 
+    bool bsCreateDecodeHuffmanTable(const int* src, short* table, int max_size)
+    {
+        const int forbidden_entry = (RBS_HUFF_FORB << 4) | 1;
+        int       first_bits = src[0];
+        struct
+        {
+            int bits;
+            int offset;
+        }
+        sub_tables[1 << 11];
+        int  size = (1 << first_bits) + 1;
+        int  i, k;
+
+        /* calc bit depths of sub tables */
+        memset(sub_tables, 0, ((size_t)1 << first_bits)*sizeof(sub_tables[0]));
+        for (i = 1, k = 1; src[k] >= 0; i++)
+        {
+            int code_count = src[k++];
+            int sb = i - first_bits;
+
+            if (sb <= 0)
+                k += code_count;
+            else
+            for (code_count += k; k < code_count; k++)
+            {
+                int  code = src[k] & huff_code_mask;
+                sub_tables[code >> sb].bits = sb;
+            }
+        }
+
+        /* calc offsets of sub tables and whole size of table */
+        for (i = 0; i < (1 << first_bits); i++)
+        {
+            int b = sub_tables[i].bits;
+            if (b > 0)
+            {
+                b = 1 << b;
+                sub_tables[i].offset = size;
+                size += b + 1;
+            }
+        }
+
+        if (size > max_size)
+        {
+            assert(0);
+            return false;
+        }
+
+        /* fill first table and subtables with forbidden values */
+        for (i = 0; i < size; i++)
+        {
+            table[i] = (short)forbidden_entry;
+        }
+
+        /* write header of first table */
+        table[0] = (short)first_bits;
+
+        /* fill first table and sub tables */
+        for (i = 1, k = 1; src[k] >= 0; i++)
+        {
+            int code_count = src[k++];
+            for (code_count += k; k < code_count; k++)
+            {
+                int  table_bits = first_bits;
+                int  code_bits = i;
+                int  code = src[k] & huff_code_mask;
+                int  val = src[k] >> huff_val_shift;
+                int  j, offset = 0;
+
+                if (code_bits > table_bits)
+                {
+                    int idx = code >> (code_bits -= table_bits);
+                    code &= (1 << code_bits) - 1;
+                    offset = sub_tables[idx].offset;
+                    table_bits = sub_tables[idx].bits;
+                    /* write header of subtable */
+                    table[offset] = (short)table_bits;
+                    /* write jump to subtable */
+                    table[idx + 1] = (short)(offset << 4);
+                }
+
+                table_bits -= code_bits;
+                assert(table_bits >= 0);
+                val = (val << 4) | code_bits;
+                offset += (code << table_bits) + 1;
+
+                for (j = 0; j < (1 << table_bits); j++)
+                {
+                    assert(table[offset + j] == forbidden_entry);
+                    table[offset + j] = (short)val;
+                }
+            }
+        }
+        return true;
+    }
+
 
     /////////////////////////// WBaseStream /////////////////////////////////
 
@@ -1927,20 +2285,24 @@ namespace jcodec
     void  WBaseStream::WriteBlock()
     {
         int size = (int)(m_current - m_start);
-        assert(m_stream != 0);
+
+        //fseek( m_file, m_block_pos, SEEK_SET );
         m_stream->put_buf(m_start, size);
+
         m_current = m_start;
+
         m_block_pos += size;
     }
 
 
-    bool  WBaseStream::Open()
+    bool  WBaseStream::Open(output_stream *stream)
     {
         Close();
         Allocate();
 
-        if (m_stream)
+        if (stream)
         {
+            m_stream = stream;
             m_is_opened = true;
             m_block_pos = 0;
             m_current = m_start;
@@ -1951,8 +2313,14 @@ namespace jcodec
 
     void  WBaseStream::Close()
     {
+        if (m_stream)
+        {
+            WriteBlock();
+            m_stream = 0;
+        }
         m_is_opened = false;
     }
+
 
     void  WBaseStream::Release()
     {
@@ -1962,6 +2330,18 @@ namespace jcodec
         }
         m_start = m_end = m_current = 0;
     }
+
+
+    void  WBaseStream::SetBlockSize(int block_size)
+    {
+        assert(block_size > 0 && (block_size & (block_size - 1)) == 0);
+
+        if (m_start && block_size == m_block_size) return;
+        Release();
+        m_block_size = block_size;
+        Allocate();
+    }
+
 
     int  WBaseStream::GetPos()
     {
@@ -2080,6 +2460,31 @@ namespace jcodec
         }
     }
 
+
+    void WMByteStream::PutDWord(int val)
+    {
+        uchar *current = m_current;
+
+        if (current + 3 < m_end)
+        {
+            current[0] = (uchar)(val >> 24);
+            current[1] = (uchar)(val >> 16);
+            current[2] = (uchar)(val >> 8);
+            current[3] = (uchar)val;
+            m_current = current + 4;
+            if (m_current == m_end)
+                WriteBlock();
+        }
+        else
+        {
+            PutByte(val >> 24);
+            PutByte(val >> 16);
+            PutByte(val >> 8);
+            PutByte(val);
+        }
+    }
+
+
     ///////////////////////////// WMBitStream /////////////////////////////////// 
 
     WMBitStream::WMBitStream()
@@ -2094,10 +2499,10 @@ namespace jcodec
     }
 
 
-   bool  WMBitStream::Open()
+    bool  WMBitStream::Open(output_stream *stream)
     {
         ResetBuffer();
-        return true;
+        return WBaseStream::Open(stream);
     }
 
 
@@ -2176,7 +2581,7 @@ namespace jcodec
         int min_val = (int)table[0];
         val -= min_val;
 
-        assert((unsigned)val < table[1]);
+        //assert((unsigned)val < table[1]);
 
         ulong code = table[val + 2];
         assert(code != 0);
@@ -2203,10 +2608,13 @@ namespace jcodec
     {
         Close();
         Allocate();
-        m_stream = stream;
-        m_is_opened = true;
-        m_block_pos = 0;
-        ResetBuffer();
+
+        m_is_opened = m_low_strm.Open(stream);
+        if (m_is_opened)
+        {
+            m_block_pos = 0;
+            ResetBuffer();
+        }
         return m_is_opened;
     }
 
