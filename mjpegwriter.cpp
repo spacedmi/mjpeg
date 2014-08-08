@@ -1738,6 +1738,7 @@ namespace jcodec
                     (qval*chroma_scale*idct_prescale[idx]));
                 SSE_fdct_qtab[i][idx] = (short)cvRound((1 << (postshift + 9)) /
                     (qval*chroma_scale*idct_prescale[idx]) * 14);
+                    (qval*chroma_scale*idct_prescale[idx]));
                 lowstrm.PutByte(qval);
             }
         }
