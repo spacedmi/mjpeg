@@ -11,11 +11,10 @@ using namespace std;
 
 int main(int, char**)
 {
-	Rect rect(0, 0, 1920, 1080);
-	Mat img(rect.size(), CV_8UC3);
-    img = imread("1920x1080.jpg");
-    img.size();
-    int nframes = 10;
+	Mat img = imread("1920x1080.jpg");
+    Mat img_yuv, img_yuv444p;
+    Rect rect(0, 0, img.cols, img.rows);
+    int nframes = 100;
     jcodec::MjpegWriter * j = new jcodec::MjpegWriter();
     VideoWriter outputVideo;
     
@@ -27,6 +26,16 @@ int main(int, char**)
 #else
     outputVideo.open("out2.avi", outputVideo.fourcc('M', 'J', 'P', 'G'), 30.0, img.size(), true);
 #endif
+
+    cvtColor(img, img_yuv, COLOR_BGR2YUV);
+    img_yuv444p.create(img.rows * 3, img.cols, CV_8U);
+    Mat planes[] =
+    {
+        img_yuv444p.rowRange(0, img.rows),
+        img_yuv444p.rowRange(img.rows, img.rows*2),
+        img_yuv444p.rowRange(img.rows*2, img.rows*3)
+    };
+    split(img_yuv, planes);
 
 	for (int i = 0; i < nframes; i++)
 	{
