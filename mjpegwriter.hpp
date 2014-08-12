@@ -11,6 +11,7 @@ typedef unsigned long ulong;
 
 namespace jcodec
 {
+    enum colorspace { COLORSPACE_BGR = 0, COLORSPACE_YUV444P = 1 };
     enum subsampling_t { Y_ONLY = 0, H1V1 = 1, H2V1 = 2, H2V2 = 3 };
 
     class output_stream
@@ -23,7 +24,7 @@ namespace jcodec
 
     struct params
     {
-        inline params() : m_quality(85), m_subsampling((subsampling_t)H2V2), m_no_chroma_discrim_flag(false), m_two_pass_flag(false), block_size(16) { }
+        inline params() : m_quality(85), m_subsampling((subsampling_t)H2V2), m_color_space((colorspace)COLORSPACE_BGR), m_no_chroma_discrim_flag(false), m_two_pass_flag(false), block_size(16) { }
 
         inline bool check() const
         {
@@ -35,6 +36,7 @@ namespace jcodec
         int m_quality;
         int block_size;
         subsampling_t m_subsampling;
+        colorspace m_color_space;
         bool m_no_chroma_discrim_flag;
         bool m_two_pass_flag;
     };
@@ -43,7 +45,7 @@ namespace jcodec
     {
     public:
         MjpegWriter();
-        int Open(char* outfile, uchar fps, Size ImSize);
+        int Open(char* outfile, uchar fps, Size ImSize, colorspace ColorSpace);
         int Write(const Mat &Im);
         int Close();
         bool isOpened();
@@ -53,12 +55,13 @@ namespace jcodec
         FILE *outFile;
         char *outfileName;
         int outformat, outfps, quality;
+        colorspace InputColorSpace;
         int width, height, type, FrameNum;
         int chunkPointer, moviPointer;
         vector<int> FrameOffset, FrameSize, AVIChunkSizeIndex, FrameNumIndexes;
         bool isOpen;
 
-        int toJPGframe(const uchar * data, uint width, uint height, int step, void *& pBuf);
+        int toJPGframe(const uchar * data, uint width, uint height, void *& pBuf);
         void StartWriteAVI();
         void WriteStreamHeader();
         void WriteIndex();
@@ -74,11 +77,11 @@ namespace jcodec
     class jpeg_encoder
     {
     public:
-        jpeg_encoder();
+        jpeg_encoder(params param);
         ~jpeg_encoder();
         bool init(output_stream *pStream, int width, int height, int src_channels, const params &comp_params = params());
         void deinit();
-        bool compress_image_to_jpeg_file_in_memory(void *&pBuf, int &buf_size, int width, int height, int num_channels, const uchar *pImage_data, const params &comp_params = params());
+        bool compress_image_to_jpeg_file_in_memory(void *&pBuf, int &buf_size, int width, int height, int num_channels, const uchar *pImage_data);
 
     private:
         jpeg_encoder(const jpeg_encoder &);

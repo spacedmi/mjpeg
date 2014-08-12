@@ -21,28 +21,29 @@ int main(int, char**)
     timer tt;
     tt.start();
     double ttotal = 0;
-#if TEST_MY
-    j->Open("out.avi", (uchar)30, img.size());
-#else
-    outputVideo.open("out2.avi", outputVideo.fourcc('M', 'J', 'P', 'G'), 30.0, img.size(), true);
-#endif
 
     cvtColor(img, img_yuv, COLOR_BGR2YUV);
-    img_yuv444p.create(img.rows * 3, img.cols, CV_8U);
+    img_yuv444p.create(img.rows * 3 , img.cols, CV_8U);
     Mat planes[] =
     {
         img_yuv444p.rowRange(0, img.rows),
-        img_yuv444p.rowRange(img.rows, img.rows*2),
-        img_yuv444p.rowRange(img.rows*2, img.rows*3)
+        img_yuv444p.rowRange(img.rows, img.rows * 2),
+        img_yuv444p.rowRange(img.rows * 2, img.rows * 3)
     };
     split(img_yuv, planes);
+
+#if TEST_MY
+    j->Open("out.avi", (uchar)30, img_yuv.size(), jcodec::COLORSPACE_YUV444P);
+#else
+    outputVideo.open("out2.avi", outputVideo.fourcc('M', 'J', 'P', 'G'), 30.0, img.size(), true);
+#endif
 
 	for (int i = 0; i < nframes; i++)
 	{
         double tstart = (double)getTickCount();
 
 #if TEST_MY
-        j->Write(img);
+        j->Write(img_yuv444p);
 #else
         outputVideo.write(img);
 #endif
