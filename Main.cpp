@@ -14,7 +14,7 @@ int main(int, char**)
 	Mat img = imread("1920x1080.jpg");
     Mat img_yuv, img_yuv444p;
     Rect rect(0, 0, img.cols, img.rows);
-    int nframes = 100;
+    int nframes = 10;
     jcodec::MjpegWriter * j = new jcodec::MjpegWriter();
     VideoWriter outputVideo;
     

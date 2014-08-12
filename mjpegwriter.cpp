@@ -6,7 +6,7 @@
 namespace jcodec
 {
 
-#define SSE 0
+#define SSE 1
 #define fourCC(a,b,c,d) ( (int) ((uchar(d)<<24) | (uchar(c)<<16) | (uchar(b)<<8) | uchar(a)) )
 #define DIM(arr) (sizeof(arr)/sizeof(arr[0]))
 #define BSWAP(v)    (((v)<<24)|(((v)&0xff00)<<8)| \
@@ -633,12 +633,15 @@ namespace jcodec
     static void SSE_aan_fdct8x8(short *src, int *dst, int step, const short *postscale)
     {
         const __m128i c0707 = _mm_set1_epi16(23167),
-            c0541 = _mm_set1_epi16(17727), 
-            c1307 = _mm_set1_epi16(21414), 
-            c0383 = _mm_set1_epi16(12550);
+            c0541 = _mm_set1_epi16(17727),
+            c1307 = _mm_set1_epi16(21414),
+            c0383 = _mm_set1_epi16(12550),
+            fix1 = _mm_set1_epi16(1),
+            fix2 = _mm_set1_epi16(2);
         short dst_short[64];
-        __m128i z = _mm_setzero_si128(), x0, x1, x2, x3, x4;
-        __m128i workspace[8], *work = workspace; // work
+        __m128i z = _mm_setzero_si128(), x0, x1, x2, x3, x4, tmp;
+        __m128i work0, work1, work2, work3, work4, work5, work6, work7, // work
+            tr_work0, tr_work1, tr_work2, tr_work3, tr_work4, tr_work5, tr_work6, tr_work7; // trans_work
 
         // Pass 1: process columns
         x0 = _mm_loadu_si128((const __m128i*)(src + 0 * step));
@@ -652,7 +655,7 @@ namespace jcodec
         x1 = _mm_adds_epi16(x2, x3);   // x1 = x2 + x3
         x2 = _mm_subs_epi16(x2, x3);   // x2 -= x3
 
-        work[7] = x0; work[1] = x2;
+        work7 = x0; work1 = x2;
 
         x2 = _mm_adds_epi16(x4, x1);   // x2 = x4 + x1
         x4 = _mm_subs_epi16(x4, x1);   // x4 -= x1
@@ -663,12 +666,12 @@ namespace jcodec
         x1 = _mm_adds_epi16(x0, x3);   // x1 = x0 + x3
         x0 = _mm_subs_epi16(x0, x3);   // x0 -= x3
 
-        work[5] = x0;
+        work5 = x0;
 
         x0 = _mm_loadu_si128((const __m128i*)(src + 2 * step));
         x3 = _mm_loadu_si128((const __m128i*)(src + 5 * step));
 
-        work[3] = _mm_sub_epi16(x0, x3);
+        work3 = _mm_sub_epi16(x0, x3);
 
         x0 = _mm_adds_epi16(x0, x3);   // x0 += x3
         x3 = _mm_adds_epi16(x0, x1);   // x3 = x0 + x1
@@ -676,17 +679,17 @@ namespace jcodec
         x1 = _mm_adds_epi16(x2, x3);   // x1 = x2 + x3
         x2 = _mm_subs_epi16(x2, x3);   // x2 -= x3
 
-        work[0] = x1; work[4] = x2;
+        work0 = x1; work4 = x2;
 
-        x0 = _mm_mulhi_epi16(_mm_adds_epi16(_mm_subs_epi16(x0, x4), _mm_subs_epi16(x0, x4)), c0707); // DCT_DESCALE((x0 - x4) * C0_707, fixb);
+        x0 = _mm_mulhi_epi16(_mm_slli_epi16(_mm_adds_epi16(_mm_subs_epi16(x0, x4), fix1), 1), c0707); // DCT_DESCALE((x0 - x4) * C0_707, fixb);
 
         x1 = _mm_adds_epi16(x4, x0);   // x1 = x4 + x0
         x4 = _mm_subs_epi16(x4, x0);   // x4 -= x0
 
-        work[2] = x4; work[6] = x1;
+        work2 = x4; work6 = x1;
 
-        x0 = work[1]; x1 = work[3];
-        x2 = work[5]; x3 = work[7];
+        x0 = work1; x1 = work3;
+        x2 = work5; x3 = work7;
 
         x0 = _mm_adds_epi16(x0, x1);   // x0 += x1
         x1 = _mm_adds_epi16(x1, x2);   // x1 += x2
@@ -697,22 +700,51 @@ namespace jcodec
         x4 = _mm_adds_epi16(x1, x3);   // x4 = x1 + x3
         x3 = _mm_subs_epi16(x3, x1);   // x3 -= x1
 
-        x1 = _mm_mulhi_epi16(_mm_slli_epi16(_mm_subs_epi16(x0, x2), 1), c0383);  // (x0 - x2) * C0_382;
-        x0 = _mm_adds_epi16(_mm_mulhi_epi16(_mm_adds_epi16(x0, x0), c0541), x1); // SSE_DCT_DESCALE(x0 * C0_541 + x1, fixb);
-        x2 = _mm_adds_epi16(_mm_mulhi_epi16(_mm_slli_epi16(x0, 2), c1307), x1);  // SSE_DCT_DESCALE(x2 * C1_306 + x1, fixb);
+        x1 = _mm_mulhi_epi16(_mm_slli_epi16(_mm_adds_epi16(_mm_subs_epi16(x0, x2), fix2), 1), c0383);  // (x0 - x2) * C0_382;
+        x0 = _mm_adds_epi16(_mm_mulhi_epi16(_mm_adds_epi16(_mm_adds_epi16(x0, x0), fix1), c0541), x1); // DCT_DESCALE(x0 * C0_541 + x1, fixb);
+        x2 = _mm_adds_epi16(_mm_mulhi_epi16(_mm_adds_epi16(_mm_slli_epi16(x2, 2), fix1), c1307), x1);  // DCT_DESCALE(x2 * C1_306 + x1, fixb);
 
         x1 = _mm_adds_epi16(x0, x3);   // x1 = x0 + x3
         x3 = _mm_subs_epi16(x3, x0);   // x3 -= x0
         x0 = _mm_adds_epi16(x4, x2);   // x0 = x4 + x2
         x4 = _mm_subs_epi16(x4, x2);   // x4 -= x2
 
-        work[5] = x1; work[1] = x0;
-        work[7] = x4; work[3] = x3;
+        work5 = x1; work1 = x0;
+        work7 = x4; work3 = x3;
+
+        // transform matrix
+
+        tr_work0 = _mm_unpacklo_epi16(work0, work1);            // a0 b0 a1 b1 a2 b2 a3 b3
+        tr_work1 = _mm_unpackhi_epi16(work0, work1);            // a4 b4 a5 b5 a6 b6 a7 b7
+        tr_work2 = _mm_unpacklo_epi16(work2, work3);            // c0 d0 c1 d1 c2 d2 c3 d3
+        tr_work3 = _mm_unpackhi_epi16(work2, work3);            // c4 d4 c5 d5 c6 d6 c7 d7
+        tr_work4 = _mm_unpacklo_epi16(work4, work5);            // e0 f0 e1 f1 e2 f2 e3 f3
+        tr_work5 = _mm_unpackhi_epi16(work4, work5);            // e4 f4 e5 f5 e6 f6 e7 f7
+        tr_work6 = _mm_unpacklo_epi16(work6, work7);            // g0 h0 g1 h1 g2 h2 g3 h3
+        tr_work7 = _mm_unpackhi_epi16(work6, work7);            // g4 h4 g5 h5 g6 h6 g7 h7
+
+        work0    = _mm_unpacklo_epi32(tr_work0, tr_work2);      // a0 b0 c0 d0 a1 b1 c1 d1
+        work1    = _mm_unpackhi_epi32(tr_work0, tr_work2);      // a2 b2 c2 d2 a3 b3 c3 d3
+        work2    = _mm_unpacklo_epi32(tr_work1, tr_work3);      // a4 b4 c4 d4 a5 b5 c5 d5
+        work3    = _mm_unpackhi_epi32(tr_work1, tr_work3);      // a6 b6 c6 d6 a7 b7 c7 d7
+        work4    = _mm_unpacklo_epi32(tr_work4, tr_work6);      // e0 f0 g0 h0 e1 f1 g1 h1
+        work5    = _mm_unpackhi_epi32(tr_work4, tr_work6);      // e2 f2 g2 h2 e3 f3 g3 h3
+        work6    = _mm_unpacklo_epi32(tr_work5, tr_work7);      // e4 f4 g4 h4 e5 f5 g5 h5
+        work7    = _mm_unpackhi_epi32(tr_work5, tr_work7);      // e6 f6 g6 h6 e7 f7 g7 h7
+
+        tr_work0 = _mm_unpacklo_epi64(work0, work4);            // a0 b0 c0 d0 e0 f0 g0 h0
+        tr_work1 = _mm_unpackhi_epi64(work0, work4);            // a1 b1 c1 d1 e1 f1 g1 h1
+        tr_work2 = _mm_unpacklo_epi64(work1, work5);            // a0 b0 c0 d0 e0 f0 g0 h0
+        tr_work3 = _mm_unpackhi_epi64(work1, work5);            // a1 b1 c1 d1 e1 f1 g1 h1
+        tr_work4 = _mm_unpacklo_epi64(work2, work6);            // a0 b0 c0 d0 e0 f0 g0 h0
+        tr_work5 = _mm_unpackhi_epi64(work2, work6);            // a1 b1 c1 d1 e1 f1 g1 h1
+        tr_work6 = _mm_unpacklo_epi64(work3, work7);            // a0 b0 c0 d0 e0 f0 g0 h0
+        tr_work7 = _mm_unpackhi_epi64(work3, work7);            // a1 b1 c1 d1 e1 f1 g1 h1
 
         // pass 2: process rows
 
-        x0 = work[0], x1 = work[7];
-        x2 = work[3], x3 = work[4];
+        x0 = tr_work0, x1 = tr_work7;
+        x2 = tr_work3, x3 = tr_work4;
 
         x4 = _mm_adds_epi16(x0, x1);   // x4 = x0 + x1
         x0 = _mm_subs_epi16(x0, x1);   // x0 -= x1
@@ -720,21 +752,21 @@ namespace jcodec
         x1 = _mm_adds_epi16(x2, x3);   // x1 = x2 + x3
         x2 = _mm_subs_epi16(x2, x3);   // x2 -= x3
 
-        work[7] = x0; work[0] = x2;
-            
+        tr_work7 = x0; tr_work0 = x2;
+
         x2 = _mm_adds_epi16(x4, x1);   // x2 = x4 + x1
         x4 = _mm_subs_epi16(x4, x1);   // x4 -= x1
 
-        x0 = work[1]; x3 = work[6];
+        x0 = tr_work1; x3 = tr_work6;
 
         x1 = _mm_adds_epi16(x0, x3);   // x1 = x0 + x3
         x0 = _mm_subs_epi16(x0, x3);   // x0 -= x3
 
-        work[4] = x0;
+        tr_work4 = x0;
 
-        x0 = work[2]; x3 = work[5];
+        x0 = tr_work2; x3 = tr_work5;
 
-        work[3] = _mm_sub_epi16(x0, x3);
+        tr_work3 = _mm_sub_epi16(x0, x3);
 
         x0 = _mm_adds_epi16(x0, x3);   // x0 += x3
         x3 = _mm_adds_epi16(x0, x1);   // x3 = x0 + x1
@@ -742,23 +774,23 @@ namespace jcodec
         x1 = _mm_adds_epi16(x2, x3);   // x1 = x2 + x3
         x2 = _mm_subs_epi16(x2, x3);   // x2 -= x3
 
-        work[1] = _mm_mulhi_epi16(x1, _mm_loadu_si128((const __m128i*)(postscale + 0 * 8))); // DCT_DESCALE(x1 * postscale[0], postshift);
-        work[2] = _mm_mulhi_epi16(x2, _mm_loadu_si128((const __m128i*)(postscale + 4 * 8))); // DCT_DESCALE(x2 * postscale[4], postshift);
-        _mm_storeu_si128((__m128i*)(dst_short + 0 * 8), work[1]);
-        _mm_storeu_si128((__m128i*)(dst_short + 4 * 8), work[2]);
+        tr_work1 = _mm_mulhi_epi16(x1, _mm_loadu_si128((const __m128i*)(postscale + 0 * 8))); // DCT_DESCALE(x1 * postscale[0], postshift);
+        tr_work2 = _mm_mulhi_epi16(x2, _mm_loadu_si128((const __m128i*)(postscale + 4 * 8))); // DCT_DESCALE(x2 * postscale[4], postshift);
+        _mm_storeu_si128((__m128i*)(dst_short + 0 * 8), tr_work1);
+        _mm_storeu_si128((__m128i*)(dst_short + 4 * 8), tr_work2);
 
         x0 = _mm_mulhi_epi16(_mm_slli_epi16(_mm_subs_epi16(x0, x4), 1), c0707); // DCT_DESCALE((x0 - x4)*C0_707, fixb);
 
         x1 = _mm_adds_epi16(x4, x0);   // x1 = x4 + x0
         x4 = _mm_subs_epi16(x4, x0);   // x4 -= x0
 
-        work[1] = _mm_mulhi_epi16(x4, _mm_loadu_si128((const __m128i*)(postscale + 2 * 8))); // DCT_DESCALE(x4 * postscale[2], postshift);
-        work[2] = _mm_mulhi_epi16(x1, _mm_loadu_si128((const __m128i*)(postscale + 6 * 8))); // DCT_DESCALE(x1 * postscale[6], postshift);
-        _mm_storeu_si128((__m128i*)(dst_short + 2 * 8), work[1]);
-        _mm_storeu_si128((__m128i*)(dst_short + 6 * 8), work[2]);
+        tr_work1 = _mm_mulhi_epi16(x4, _mm_loadu_si128((const __m128i*)(postscale + 2 * 8))); // DCT_DESCALE(x4 * postscale[2], postshift);
+        tr_work2 = _mm_mulhi_epi16(x1, _mm_loadu_si128((const __m128i*)(postscale + 6 * 8))); // DCT_DESCALE(x1 * postscale[6], postshift);
+        _mm_storeu_si128((__m128i*)(dst_short + 2 * 8), tr_work1);
+        _mm_storeu_si128((__m128i*)(dst_short + 6 * 8), tr_work2);
 
-        x0 = work[0]; x1 = work[3];
-        x2 = work[4]; x3 = work[7];
+        x0 = tr_work0; x1 = tr_work3;
+        x2 = tr_work4; x3 = tr_work7;
 
         x0 = _mm_adds_epi16(x0, x1);   // x0 += x1
         x1 = _mm_adds_epi16(x1, x2);   // x1 += x2
@@ -771,22 +803,22 @@ namespace jcodec
 
         x1 = _mm_mulhi_epi16(_mm_slli_epi16(_mm_subs_epi16(x0, x2), 1), c0383); // (x0 - x2) * C0_382;
 
-        x0 = _mm_adds_epi16(_mm_mulhi_epi16(_mm_adds_epi16(x0, x0), c0541), x1); // SSE_DCT_DESCALE(x0 * C0_541 + x1, fixb);
-        x2 = _mm_adds_epi16(_mm_mulhi_epi16(_mm_slli_epi16(x0, 2), c1307), x1);  // SSE_DCT_DESCALE(x2 * C1_306 + x1, fixb);
+        x0 = _mm_adds_epi16(_mm_mulhi_epi16(_mm_adds_epi16(x0, x0), c0541), x1); // DCT_DESCALE(x0 * C0_541 + x1, fixb);
+        x2 = _mm_adds_epi16(_mm_mulhi_epi16(_mm_slli_epi16(x2, 2), c1307), x1);  // DCT_DESCALE(x2 * C1_306 + x1, fixb);
 
         x1 = _mm_adds_epi16(x0, x3);   // x1 = x0 + x3
         x3 = _mm_subs_epi16(x3, x0);   // x3 -= x0
         x0 = _mm_adds_epi16(x4, x2);   // x0 = x4 + x2
         x4 = _mm_subs_epi16(x4, x2);   // x4 -= x2
 
-        work[1] = _mm_mulhi_epi16(x1, _mm_loadu_si128((const __m128i*)(postscale + 5 * 8))); // DCT_DESCALE(x1 * postscale[5], postshift);
-        work[2] = _mm_mulhi_epi16(x0, _mm_loadu_si128((const __m128i*)(postscale + 1 * 8))); // DCT_DESCALE(x0 * postscale[1], postshift);
-        work[3] = _mm_mulhi_epi16(x4, _mm_loadu_si128((const __m128i*)(postscale + 7 * 8))); // DCT_DESCALE(x4 * postscale[7], postshift);
-        work[4] = _mm_mulhi_epi16(x3, _mm_loadu_si128((const __m128i*)(postscale + 3 * 8))); // DCT_DESCALE(x3 * postscale[3], postshift);
-        _mm_storeu_si128((__m128i*)(dst_short + 5 * 8), work[1]);
-        _mm_storeu_si128((__m128i*)(dst_short + 1 * 8), work[2]);
-        _mm_storeu_si128((__m128i*)(dst_short + 7 * 8), work[3]);
-        _mm_storeu_si128((__m128i*)(dst_short + 3 * 8), work[4]);
+        tr_work1 = _mm_mulhi_epi16(x1, _mm_loadu_si128((const __m128i*)(postscale + 5 * 8))); // DCT_DESCALE(x1 * postscale[5], postshift);
+        tr_work2 = _mm_mulhi_epi16(x0, _mm_loadu_si128((const __m128i*)(postscale + 1 * 8))); // DCT_DESCALE(x0 * postscale[1], postshift);
+        tr_work3 = _mm_mulhi_epi16(x4, _mm_loadu_si128((const __m128i*)(postscale + 7 * 8))); // DCT_DESCALE(x4 * postscale[7], postshift);
+        tr_work4 = _mm_mulhi_epi16(x3, _mm_loadu_si128((const __m128i*)(postscale + 3 * 8))); // DCT_DESCALE(x3 * postscale[3], postshift);
+        _mm_storeu_si128((__m128i*)(dst_short + 5 * 8), tr_work1);
+        _mm_storeu_si128((__m128i*)(dst_short + 1 * 8), tr_work2);
+        _mm_storeu_si128((__m128i*)(dst_short + 7 * 8), tr_work3);
+        _mm_storeu_si128((__m128i*)(dst_short + 3 * 8), tr_work4);
 
         // for test only
         for (int k = 0; k < 64; k++)
@@ -930,15 +962,15 @@ namespace jcodec
             // put coefficients
             for (j = 0; j < 64; j++)
             {
+                int idx = zigzag[j];
 #if SSE
                 int SSE_idx = SSE_zigzag[j],
                     SSE_qval = cvRound(qtable[SSE_idx] * inv_quality);
                 SSE_qval = clamp_table[SSE_qval];
                 SSE_fdct_qtab[i][SSE_idx] = (short)cvRound((1 << (postshift + 9)) /
-                    (SSE_qval*chroma_scale*idct_prescale[SSE_idx]));
+                    (SSE_qval*chroma_scale*idct_prescale[idx]));
                 lowstrm.PutByte(SSE_qval);
 #else
-                int idx = zigzag[j];
                 int qval = cvRound(qtable[idx] * inv_quality);
                 qval = clamp_table[qval];
                 fdct_qtab[i][idx] = cvRound((1 << (postshift + 9)) /
@@ -1033,7 +1065,7 @@ namespace jcodec
                     {
                     case COLORSPACE_BGR:
                         {
-#if 1
+#if SSE
                             short* Y_data = block_short[0];
                             short* UV_data = block_short[luma_count];
                             __m128i m0 = _mm_setr_epi16(0, m00, m01, m02, m00, m01, m02, 0);
